@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Editores
+.vscode/
+.idea/
+
+# Documentos de trabajo de la aplicación (ui/__init__.py: SCRATCH_DIR)
+documentos/
+
+# Auxiliares de LaTeX
+*.aux
+*.log
+*.out
+*.toc
+*.lof
+*.lot
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.bbl
+*.blg
+*.bcf
+*.run.xml
+*.nav
+*.snm
+*.idx
+*.ilg
+*.ind
+
+# Resultados de convertir los ejemplos (se numeran: ejemplo_1.tex, ejemplo_1_imagenes/)
+/ejemplo_*
+*_imagenes/
+
+# Sistema
+Thumbs.db
+.DS_Store

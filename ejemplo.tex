@@ -1,0 +1,210 @@
+% ============================================
+% Documento de Ejemplo - LaTeX
+% Compilar con: pdflatex ejemplo.tex
+% ============================================
+\documentclass[12pt, a4paper]{article}
+
+% ── Paquetes ──────────────────────────────────
+\usepackage[utf8]{inputenc}        % Soporte UTF-8 (tildes, ñ, etc.)
+\usepackage[spanish]{babel}        % Idioma español
+\usepackage[T1]{fontenc}           % Codificación de fuentes
+\usepackage{lmodern}               % Fuente Latin Modern (mejor calidad)
+\usepackage{amsmath, amssymb}      % Matemáticas avanzadas
+\usepackage{graphicx}              % Imágenes
+\usepackage{xcolor}                % Colores
+\usepackage{hyperref}              % Enlaces clickeables
+\usepackage{geometry}              % Márgenes
+\usepackage{fancyhdr}              % Encabezados/pies de página
+\usepackage{booktabs}              % Tablas profesionales
+\usepackage{enumitem}              % Listas personalizadas
+\usepackage{listings}              % Código fuente
+
+% ── Configuración de página ──────────────────
+\geometry{
+    top=2.5cm,
+    bottom=2.5cm,
+    left=3cm,
+    right=3cm,
+    headheight=14.5pt
+}
+
+% ── Configuración de hyperref ────────────────
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    urlcolor=blue!70!black,
+    citecolor=green!50!black,
+    pdftitle={Documento de Ejemplo},
+    pdfauthor={Tu Nombre}
+}
+
+% ── Encabezados y pies de página ─────────────
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\textit{Documento de Ejemplo}}
+\fancyhead[R]{\textit{\today}}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% ── Configuración de código fuente ───────────
+\lstset{
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue!70!black}\bfseries,
+    commentstyle=\color{green!50!black}\itshape,
+    stringstyle=\color{red!70!black},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    frame=single,
+    breaklines=true,
+    captionpos=b
+}
+
+% ── Datos del documento ──────────────────────
+\title{
+    \textbf{Documento de Ejemplo en \LaTeX}\\[0.5em]
+    \large Una guía rápida de lo que puedes hacer
+}
+\author{Tu Nombre Aquí}
+\date{\today}
+
+% ============================================
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+% ── SECCIÓN 1 ──────────────────────────────
+\section{Introducción}
+
+¡Bienvenido a tu primer documento \LaTeX! Este archivo de ejemplo te muestra las principales funcionalidades que puedes usar. \LaTeX{} es el estándar para documentos académicos, científicos y profesionales.
+
+Este documento fue creado para probar tu setup de \LaTeX{} en VS Code. Si puedes ver el PDF generado, \textbf{¡todo funciona correctamente!}
+
+% ── SECCIÓN 2 ──────────────────────────────
+\section{Formato de Texto}
+
+Puedes usar diferentes estilos de texto:
+
+\begin{itemize}
+    \item \textbf{Texto en negrita}
+    \item \textit{Texto en cursiva}
+    \item \underline{Texto subrayado}
+    \item \texttt{Texto monoespaciado} (para código)
+    \item \textsc{Texto en versalitas}
+    \item Texto en \textcolor{red}{rojo}, \textcolor{blue}{azul} y \textcolor{green!50!black}{verde}
+\end{itemize}
+
+% ── SECCIÓN 3 ──────────────────────────────
+\section{Listas}
+
+\subsection{Lista no ordenada}
+\begin{itemize}[label=\textbullet]
+    \item Primer elemento
+    \item Segundo elemento
+    \item Tercer elemento con sub-items:
+    \begin{itemize}
+        \item Sub-item A
+        \item Sub-item B
+    \end{itemize}
+\end{itemize}
+
+\subsection{Lista ordenada}
+\begin{enumerate}
+    \item Paso uno: Instalar MiKTeX
+    \item Paso dos: Instalar LaTeX Workshop
+    \item Paso tres: Escribir tu documento
+    \item Paso cuatro: Compilar y disfrutar
+\end{enumerate}
+
+% ── SECCIÓN 4 ──────────────────────────────
+\section{Matemáticas}
+
+\LaTeX{} es famoso por sus ecuaciones. Aquí algunos ejemplos:
+
+\subsection{Ecuaciones en línea}
+La famosa ecuación de Einstein: $E = mc^2$. La fórmula cuadrática es $x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}$.
+
+\subsection{Ecuaciones destacadas}
+La integral de Gauss:
+\begin{equation}
+    \int_{-\infty}^{\infty} e^{-x^2} \, dx = \sqrt{\pi}
+\end{equation}
+
+La serie de Taylor:
+\begin{equation}
+    f(x) = \sum_{n=0}^{\infty} \frac{f^{(n)}(a)}{n!} (x - a)^n
+\end{equation}
+
+Un sistema de ecuaciones:
+\begin{align}
+    3x + 2y &= 7 \\
+    x - y &= 1
+\end{align}
+
+% ── SECCIÓN 5 ──────────────────────────────
+\section{Tablas}
+
+\begin{table}[h]
+    \centering
+    \caption{Comparación de formatos de documento}
+    \label{tab:formatos}
+    \begin{tabular}{@{}lccc@{}}
+        \toprule
+        \textbf{Característica} & \textbf{\LaTeX} & \textbf{Word} & \textbf{Google Docs} \\
+        \midrule
+        Ecuaciones          & Excelente  & Bueno    & Básico  \\
+        Tipografía          & Excelente  & Bueno    & Bueno   \\
+        Control de versiones & Excelente & Limitado & Bueno   \\
+        Colaboración        & Medio      & Bueno    & Excelente \\
+        Curva de aprendizaje & Alta      & Baja     & Baja    \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+% ── SECCIÓN 6 ──────────────────────────────
+\section{Código Fuente}
+
+Puedes incluir código con resaltado de sintaxis:
+
+\begin{lstlisting}[language=Python, caption={Ejemplo en Python}]
+def fibonacci(n):
+    """Calcula el n-esimo numero de Fibonacci."""
+    if n <= 1:
+        return n
+    a, b = 0, 1
+    for _ in range(2, n + 1):
+        a, b = b, a + b
+    return b
+
+# Imprimir los primeros 10 numeros
+for i in range(10):
+    print(f"F({i}) = {fibonacci(i)}")
+\end{lstlisting}
+
+% ── SECCIÓN 7 ──────────────────────────────
+\section{Referencias y Enlaces}
+
+Puedes hacer referencia a la Tabla~\ref{tab:formatos} fácilmente. También puedes agregar enlaces como \href{https://www.latex-project.org/}{la página oficial de \LaTeX}.
+
+Para citas bibliográficas, puedes usar BibTeX (revisa la documentación para más detalles).
+
+% ── CONCLUSIÓN ─────────────────────────────
+\section{Conclusión}
+
+¡Tu setup de \LaTeX{} está funcionando! Ahora puedes:
+
+\begin{enumerate}
+    \item Editar este archivo o crear nuevos \texttt{.tex}
+    \item Compilar a PDF con \textbf{Ctrl+S} (se compila automáticamente)
+    \item Exportar a Word con el task \textbf{``Exportar a Word''}
+    \item Usar el script \texttt{build.ps1} para automatizar todo
+\end{enumerate}
+
+\vfill
+\begin{center}
+    \rule{0.5\textwidth}{0.4pt}\\[0.5em]
+    \textit{Documento generado con \LaTeX{} desde VS Code}
+\end{center}
+
+\end{document}
