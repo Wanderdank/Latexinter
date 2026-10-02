@@ -1,0 +1,20 @@
+# Dependencias de Python de Latexinter
+#   pip install -r requirements.txt
+#
+# Además hacen falta dos programas externos que NO se instalan con pip:
+#   winget install --id JohnMacFarlane.Pandoc     (pandoc)
+#   winget install --id MiKTeX.MiKTeX             (pdflatex)
+
+PyQt5>=5.15          # interfaz de escritorio
+PyMuPDF>=1.24        # lectura del PDF y vista previa
+pymupdf4llm>=0.0.17  # extracción de PDF a Markdown
+Pillow>=10.0         # recorte de las fórmulas para el OCR
+
+# ── Opcional: OCR de fórmulas ──────────────────────────────────────────
+# Sin esto se recuperan los índices, los símbolos y los operadores leyendo la
+# maquetación del PDF, pero no las fórmulas apiladas (fracciones, matrices).
+# Instálalo aparte, porque se trae PyTorch y ocupa alrededor de 1,5 GB:
+#
+#   pip install pix2tex
+#
+# La primera vez que se usa descarga el modelo (unos 115 MB).

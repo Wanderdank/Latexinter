@@ -1,0 +1,785 @@
+"""
+pdfmath.py - Reconstruye matemáticas leyendo la maquetación del PDF.
+
+Un PDF no guarda fórmulas, guarda glifos colocados en la página. El extractor
+de texto devuelve "x2" tanto para «x por 2» como para «x al cuadrado»: la
+diferencia solo existe en la geometría. Aquí se mira el tamaño de letra, la
+línea base y el nombre de la fuente de cada fragmento para deducir:
+
+  · qué trozos son superíndices o subíndices  → x^{2}, v_{\\mathrm{max}}
+  · qué líneas enteras son ecuaciones destacadas, que el extractor convierte
+    en imagen y por tanto pierde como LaTeX.
+
+Las fuentes matemáticas de TeX (LMMathItalic, CMMI, CMSY, MSBM…) marcan sin
+ambigüedad qué partes de una línea son fórmula.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Optional
+
+from . import mathfix
+
+# Fuentes que solo se usan para componer matemáticas.
+MATH_FONT_RE = re.compile(
+    r"CMMI|CMSY|CMEX|CMBSY|MSAM|MSBM|EUSM|EUFM|RSFS|"
+    r"MathItalic|MathSymbol|MathExtension|MathJax|"
+    r"STIX.*Math|XITSMath|Cambria\s*Math|Asana.*Math|Math\b|Symbol",
+    re.IGNORECASE,
+)
+
+# Marcadores de énfasis que Markdown intercala dentro de una fórmula.
+_EMPHASIS = r"(?:\*\*|__|[_*`])*"
+
+_WORD = re.compile(r"^[A-Za-z]{2,}$")
+_ONLY_DIGITS = re.compile(r"^\d+$")
+
+# La fuente de extensión de TeX (CMEX / LMMathExtension) guarda los operadores
+# grandes en posiciones ASCII: la integral es una 'Z' y el sumatorio una 'X'.
+# Sin esta tabla, una integral se extrae del PDF como la letra Z.
+EXTENSION_FONT_RE = re.compile(r"MathExtension|CMEX|LMEX", re.IGNORECASE)
+
+BIG_OPERATORS: dict[str, str] = {
+    "H": "\\bigoplus", "I": "\\bigoplus", "J": "\\bigotimes", "K": "\\bigotimes",
+    "L": "\\bigodot", "M": "\\bigodot", "N": "\\oint", "O": "\\oint",
+    "P": "\\sum", "Q": "\\prod", "R": "\\int", "S": "\\bigcup", "T": "\\bigcap",
+    "U": "\\biguplus", "V": "\\bigwedge", "W": "\\bigvee",
+    "X": "\\sum", "Y": "\\prod", "Z": "\\int", "[": "\\bigcup", "\\": "\\bigcap",
+    "]": "\\biguplus", "^": "\\bigwedge", "_": "\\bigvee",
+}
+
+_BIG_OPERATOR_START = re.compile(
+    r"^(\\(?:int|iint|iiint|oint|sum|prod|coprod|big[a-z]+))"
+)
+
+
+@dataclass(frozen=True)
+class MathFix:
+    """Una sustitución deducida de la maquetación."""
+
+    plain: str      # el texto tal como aparece en el PDF ("mc2")
+    pattern: str    # regex tolerante al marcado de Markdown ("_mc_[2]")
+    latex: str      # el reemplazo ("$mc^{2}$")
+
+
+# ────────────────────────────────────────────────────────────
+# Clasificación de fragmentos dentro de una línea
+# ────────────────────────────────────────────────────────────
+
+def _line_baseline(spans: list[dict]) -> tuple[float, float]:
+    """Tamaño de letra y línea base dominantes de la línea (los del cuerpo)."""
+    weights: dict[float, int] = {}
+    for span in spans:
+        size = round(span["size"], 1)
+        weights[size] = weights.get(size, 0) + len(span["text"].strip())
+    if not weights:
+        return 0.0, 0.0
+    base_size = max(weights, key=lambda s: (weights[s], s))
+
+    baselines = sorted(
+        span["origin"][1] for span in spans if round(span["size"], 1) == base_size
+    )
+    base_y = baselines[len(baselines) // 2] if baselines else 0.0
+    return base_size, base_y
+
+
+def _script_kind(span: dict, base_size: float, base_y: float) -> Optional[str]:
+    """'sup', 'sub' o None."""
+    if base_size <= 0:
+        return None
+    # Un índice se compone más pequeño; con el mismo cuerpo es texto normal.
+    if span["size"] >= base_size - 0.4:
+        return None
+    dy = span["origin"][1] - base_y
+    if dy < -0.14 * base_size:
+        return "sup"
+    if dy > 0.08 * base_size:
+        return "sub"
+    return None
+
+
+def _is_math_font(span: dict) -> bool:
+    return bool(MATH_FONT_RE.search(span.get("font", "")))
+
+
+# Los dígitos, paréntesis y signos se componen en fuente normal incluso dentro
+# de una fórmula, así que no dicen nada sobre si la línea es matemática.
+_NEUTRAL_CHARS = set("()[]{}0123456789+-=.,;:!/|<> \t")
+
+
+def _math_ratio(spans: list[dict]) -> tuple[int, int]:
+    """
+    Cuántos caracteres de la línea deciden si es matemática, y cuántos de
+    ellos van en fuente matemática.
+    """
+    total = 0
+    math_chars = 0
+    for span in spans:
+        decisive = sum(1 for ch in span["text"] if ch not in _NEUTRAL_CHARS)
+        total += decisive
+        if _is_math_font(span):
+            math_chars += decisive
+    return total, math_chars
+
+
+# ────────────────────────────────────────────────────────────
+# Traducción de fragmentos
+# ────────────────────────────────────────────────────────────
+
+def _to_math(text: str) -> str:
+    """Traduce un fragmento suelto a notación matemática LaTeX."""
+    out: list[str] = []
+    for i, ch in enumerate(text):
+        if ch.isascii():
+            out.append(ch)
+            continue
+        cmd = mathfix._symbol_to_latex(ch)
+        if cmd is None:
+            out.append(ch)
+        elif re.fullmatch(r"\\[A-Za-z]+", cmd):
+            following = text[i + 1: i + 2]
+            out.append(cmd + " " if following.isalnum() else cmd)
+        else:
+            out.append(cmd)
+    return "".join(out).strip()
+
+
+def _script_body(text: str) -> str:
+    """Contenido de un ^{...} o _{...}."""
+    body = _to_math(text)
+    if _WORD.match(body) and body not in mathfix.FUNCTIONS:
+        return "\\mathrm{" + body + "}"
+    if body in mathfix.FUNCTIONS:
+        return "\\" + body
+    return body
+
+
+def _trailing_word(text: str) -> str:
+    """Último trozo sin espacios de un fragmento: la base del superíndice."""
+    match = re.search(r"\S+$", text)
+    return match.group(0) if match else ""
+
+
+def _tolerant_pattern(base: str, scripts: list[tuple[str, str]]) -> str:
+    """
+    El extractor intercala marcadores de Markdown y encierra los superíndices
+    entre corchetes: "mc2" aparece en el texto como "_mc_[2]". Este patrón
+    reconoce ambas formas.
+    """
+    parts = [r"(?<![A-Za-z0-9])", _EMPHASIS, re.escape(base), _EMPHASIS]
+    for _, text in scripts:
+        parts.append(r"[ \t]*\[?" + re.escape(text) + r"\]?" + _EMPHASIS)
+    parts.append(r"(?![A-Za-z0-9])")
+    return "".join(parts)
+
+
+# ────────────────────────────────────────────────────────────
+# Superíndices y subíndices en línea
+# ────────────────────────────────────────────────────────────
+
+def _page_fixes(page) -> list[MathFix]:
+    fixes: list[MathFix] = []
+
+    for block in page.get_text("dict").get("blocks", []):
+        if block.get("type") != 0:                 # 0 = texto
+            continue
+        for line in block.get("lines", []):
+            spans = [s for s in line.get("spans", []) if s["text"].strip()]
+            if len(spans) < 2:
+                continue
+            base_size, base_y = _line_baseline(spans)
+            kinds = [_script_kind(s, base_size, base_y) for s in spans]
+            if not any(kinds):
+                continue
+
+            i = 0
+            while i < len(spans):
+                if kinds[i] is None:
+                    i += 1
+                    continue
+
+                # Base: el final del fragmento anterior ("mc" de "mc²").
+                base_raw = _trailing_word(spans[i - 1]["text"]) if i > 0 else ""
+                if not base_raw:
+                    i += 1
+                    continue
+
+                # Todos los índices consecutivos que cuelgan de esa base.
+                scripts: list[tuple[str, str]] = []
+                j = i
+                while j < len(spans) and kinds[j] is not None:
+                    scripts.append((kinds[j], spans[j]["text"].strip()))
+                    j += 1
+
+                plain = base_raw + "".join(text for _, text in scripts)
+                too_long = any(len(text) > 12 for _, text in scripts)
+                if len(plain) < 2 or _ONLY_DIGITS.match(plain) or too_long:
+                    i = j
+                    continue
+
+                latex = _to_math(base_raw)
+                for kind, text in scripts:
+                    body = _script_body(text)
+                    if body:
+                        latex += ("^" if kind == "sup" else "_") + "{" + body + "}"
+
+                fixes.append(MathFix(
+                    plain=plain,
+                    pattern=_tolerant_pattern(base_raw, scripts),
+                    latex="$" + latex + "$",
+                ))
+                i = j
+
+    return fixes
+
+
+def collect_math_fixes(page) -> list[MathFix]:
+    """
+    Sustituciones deducidas de la maquetación de una página, sin duplicados y
+    de más largas a más cortas para que la más específica gane.
+    """
+    seen: dict[str, MathFix] = {}
+    for fix in _page_fixes(page):
+        seen.setdefault(fix.plain, fix)
+    return sorted(seen.values(), key=lambda f: -len(f.plain))
+
+
+def apply_fixes_to_text(text: str, fixes: list[MathFix]) -> tuple[str, int]:
+    """
+    Aplica las sustituciones al Markdown de esa misma página. Devuelve el
+    texto corregido y cuántas sustituciones se hicieron.
+    """
+    applied = 0
+    for fix in fixes:
+        # El reemplazo se pasa como función para que las barras invertidas de
+        # LaTeX no se interpreten como referencias de grupo.
+        text, count = re.subn(fix.pattern, lambda _m, r=fix.latex: r, text)
+        applied += count
+    return text, applied
+
+
+# ────────────────────────────────────────────────────────────
+# Ecuaciones destacadas
+# ────────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class DisplayEquation:
+    """Una ecuación centrada, reconstruida a partir de sus glifos."""
+
+    latex: str
+    y: float
+    confidence: float       # proporción de la línea compuesta en fuente matemática
+    rect: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+
+
+def _union(rects: list[tuple[float, float, float, float]]) -> tuple[float, float, float, float]:
+    if not rects:
+        return (0.0, 0.0, 0.0, 0.0)
+    return (
+        min(r[0] for r in rects), min(r[1] for r in rects),
+        max(r[2] for r in rects), max(r[3] for r in rects),
+    )
+
+
+def _span_text(span: dict) -> str:
+    """Texto de un fragmento, traduciendo la fuente de operadores grandes."""
+    text = span["text"].strip()
+    if EXTENSION_FONT_RE.search(span.get("font", "")):
+        translated = [BIG_OPERATORS.get(ch) for ch in text]
+        if any(translated):
+            return "".join(
+                cmd + " " if cmd else ch for cmd, ch in zip(translated, text)
+            ).strip()
+    return _to_math(text)
+
+
+def _reconstruct_line(spans: list[dict]) -> str:
+    """
+    LaTeX de una línea completa. Los índices se anidan por tamaño de letra:
+    en "e⁻ˣ²" la x y el 2 están en cuerpos distintos, así que el resultado es
+    e^{-x^{2}} y no e^{-}^{x}^{2}.
+    """
+    base_size, base_y = _line_baseline(spans)
+    pieces: list[str] = []
+    open_scripts: list[float] = []          # tamaños de los índices abiertos
+    previous_right: Optional[float] = None
+    previous_was_operator = False
+
+    def close_to(size: Optional[float]) -> None:
+        """Cierra los índices más pequeños que el tamaño indicado."""
+        while open_scripts and (size is None or open_scripts[-1] < size):
+            open_scripts.pop()
+            pieces.append("}")
+
+    for span in spans:
+        text = span["text"].strip()
+        if not text:
+            continue
+
+        size = span["size"]
+        kind = _script_kind(span, base_size, base_y)
+        # Los operadores grandes tienen el origen muy alto, así que un índice
+        # a su derecha se clasifica mal: en la práctica es el límite superior.
+        if kind == "sub" and previous_was_operator:
+            kind = "sup"
+
+        if kind is None:
+            close_to(None)
+            gap = (
+                previous_right is not None
+                and span["bbox"][0] - previous_right > 0.2 * base_size
+            )
+            if gap and pieces:
+                pieces.append("\\;")
+            pieces.append(_span_text(span))
+        else:
+            close_to(size)
+            if not open_scripts or open_scripts[-1] > size:
+                pieces.append(("^" if kind == "sup" else "_") + "{")
+                open_scripts.append(size)
+            pieces.append(_script_body(text))
+
+        previous_right = span["bbox"][2]
+        previous_was_operator = bool(
+            EXTENSION_FONT_RE.search(span.get("font", ""))
+        )
+
+    close_to(None)
+    body = re.sub(r"(\\;)+", "\\\\;", "".join(pieces))
+    return mathfix._tidy_math(body)
+
+
+def _merge_fragments(fragments: list[str]) -> str:
+    """
+    Une los trozos de una ecuación de varias líneas. Un trozo corto justo
+    encima de un operador grande es su límite superior:  ∞ + ∑ → \\sum^{\\infty}
+    """
+    merged: list[str] = []
+    i = 0
+    while i < len(fragments):
+        current = fragments[i]
+        following = fragments[i + 1] if i + 1 < len(fragments) else None
+        if (
+            following is not None
+            and len(current) <= 10
+            and "=" not in current
+            and _BIG_OPERATOR_START.match(following)
+        ):
+            match = _BIG_OPERATOR_START.match(following)
+            merged.append(
+                match.group(1) + "^{" + current + "}" + following[match.end():]
+            )
+            i += 2
+            continue
+        merged.append(current)
+        i += 1
+    return " ".join(part for part in merged if part).strip()
+
+
+def collect_display_equations(page) -> list[DisplayEquation]:
+    """
+    Ecuaciones centradas de la página. El extractor de Markdown las convierte
+    en imagen, así que reconstruirlas aquí es la única forma de recuperarlas
+    como LaTeX.
+
+    Se reconocen por dos rasgos: están compuestas casi enteras en fuentes
+    matemáticas y van centradas en la página. Lo segundo es lo que las
+    distingue de una fórmula dentro de un párrafo.
+    """
+    page_center = page.rect.width / 2
+    page_width = page.rect.width or 1
+    equations: list[DisplayEquation] = []
+
+    def flush(group: list[tuple[float, str, float, tuple]]) -> None:
+        if not group:
+            return
+        group.sort(key=lambda item: item[0])
+        latex = _merge_fragments([item[1] for item in group])
+        if len(latex) < 6:
+            return
+        equations.append(DisplayEquation(
+            latex=latex,
+            y=group[0][0],
+            confidence=sum(item[2] for item in group) / len(group),
+            rect=_union([item[3] for item in group]),
+        ))
+
+    for block in page.get_text("dict").get("blocks", []):
+        if block.get("type") != 0:
+            continue
+
+        group: list[tuple[float, str, float, tuple]] = []
+        for line in block.get("lines", []):
+            spans = [s for s in line.get("spans", []) if s["text"].strip()]
+            total, math_chars = _math_ratio(spans)
+
+            centered = False
+            if spans:
+                left = min(s["bbox"][0] for s in spans)
+                right = max(s["bbox"][2] for s in spans)
+                centered = abs((left + right) / 2 - page_center) / page_width < 0.15
+
+            if not spans or total < 1 or not centered or math_chars / total < 0.45:
+                flush(group)
+                group = []
+                continue
+
+            latex = _reconstruct_line(spans)
+            if latex:
+                caja = _union([tuple(s["bbox"]) for s in spans])
+                group.append((spans[0]["origin"][1], latex, math_chars / total, caja))
+        flush(group)
+
+    equations.sort(key=lambda e: e.y)
+    return _join_split_equations(equations)
+
+
+# Un operador grande y sus límites suelen quedar en bloques distintos: la
+# integral por un lado y "de −∞ a ∞ …" por otro.
+_ENDS_WITH_OPERATOR = re.compile(
+    r"\\(?:int|iint|iiint|oint|sum|prod|coprod|big[a-z]+)"
+    r"(?:[\^_]\{[^{}]*\})*\s*$"
+)
+
+
+def _join_split_equations(equations: list[DisplayEquation]) -> list[DisplayEquation]:
+    joined: list[DisplayEquation] = []
+    for equation in equations:
+        if joined:
+            previous = joined[-1]
+            dangling_limit = equation.latex.startswith(("_{", "^{"))
+            open_operator = bool(_ENDS_WITH_OPERATOR.search(previous.latex))
+            if (dangling_limit or open_operator) and equation.y - previous.y < 60:
+                joined[-1] = DisplayEquation(
+                    latex=(previous.latex + equation.latex).strip(),
+                    y=previous.y,
+                    confidence=min(previous.confidence, equation.confidence),
+                    rect=_union([previous.rect, equation.rect]),
+                )
+                continue
+        joined.append(equation)
+    return joined
+
+
+# ────────────────────────────────────────────────────────────
+# Fracciones y demás fórmulas «verticales»
+# ────────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class MathRegion:
+    """
+    Un trozo de página que contiene una fórmula apilada (una fracción, una
+    matriz, un binomio…). Se guarda su rectángulo, para poder recortarlo y
+    pasárselo al OCR, y el texto plano que el extractor sacó de ahí, para saber
+    qué hay que sustituir en el Markdown.
+    """
+
+    rect: tuple[float, float, float, float]
+    plain: str
+    pattern: str
+    kind: str = "fraccion"
+    # Renglones ajenos que se cuelan en el recorte (la raíz de una fracción es
+    # tan alta que su caja invade la línea de texto de encima). Se tapan de
+    # blanco antes de pasarle la imagen al modelo.
+    exclude: tuple[tuple[float, float, float, float], ...] = ()
+
+
+# Una raya de fracción es corta, fina y horizontal. Las de las tablas y las
+# reglas de encabezado son mucho más largas.
+_RAYA_MAX_ANCHO = 260.0
+_RAYA_MIN_ANCHO = 5.0
+_RAYA_MAX_ALTO = 2.2
+
+
+def _fraction_bars(page) -> list[tuple[float, float, float, float]]:
+    """Rectángulos de las rayas que parecen barras de fracción."""
+    barras: list[tuple[float, float, float, float]] = []
+    try:
+        dibujos = page.get_drawings()
+    except Exception:
+        return barras
+
+    for dibujo in dibujos:
+        rect = dibujo.get("rect")
+        if rect is None:
+            continue
+        ancho, alto = rect.width, rect.height
+        if not (_RAYA_MIN_ANCHO <= ancho <= _RAYA_MAX_ANCHO):
+            continue
+        if alto > _RAYA_MAX_ALTO or ancho < alto * 4:
+            continue
+        barras.append((rect.x0, rect.y0, rect.x1, rect.y1))
+    return barras
+
+
+def _lines_with_spans(page) -> list[tuple[tuple, list[dict]]]:
+    resultado: list[tuple[tuple, list[dict]]] = []
+    for block in page.get_text("dict").get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            spans = [s for s in line.get("spans", []) if s["text"].strip()]
+            if spans:
+                resultado.append((_union([tuple(s["bbox"]) for s in spans]), spans))
+    return resultado
+
+
+def _dentro(caja: tuple, marco: tuple, holgura: float = 1.5) -> bool:
+    """¿La caja está contenida en el marco, con un poco de holgura?"""
+    return (
+        caja[0] >= marco[0] - holgura and caja[2] <= marco[2] + holgura
+        and caja[1] >= marco[1] - holgura and caja[3] <= marco[3] + holgura
+    )
+
+
+def _intersecta(caja: tuple, marco: tuple) -> bool:
+    return (
+        caja[0] < marco[2] and caja[2] > marco[0]
+        and caja[1] < marco[3] and caja[3] > marco[1]
+    )
+
+
+def _candidatos_a_lado(renglones, barra, arriba: bool) -> list[tuple]:
+    """
+    Renglones que pueden ser el numerador (o el denominador) de esa raya.
+
+    Un numerador nunca es más ancho que la raya y está justo encima; si el
+    renglón desborda la raya o queda lejos, la raya no era una fracción sino
+    un subrayado o el filete de una tabla.
+    """
+    x0, y0, x1, y1 = barra
+    centro_y = (y0 + y1) / 2
+    ancho_barra = x1 - x0
+    elegidos: list[tuple] = []
+
+    for caja, spans in renglones:
+        ancho_caja = caja[2] - caja[0]
+        solape = min(caja[2], x1) - max(caja[0], x0)
+        if solape <= 0 or solape < 0.6 * min(ancho_barra, ancho_caja):
+            continue
+        if ancho_caja > ancho_barra * 1.3:
+            continue
+
+        alto = max(6.0, caja[3] - caja[1])
+        if arriba:
+            distancia = centro_y - caja[3]          # hueco entre la raya y el texto
+        else:
+            distancia = caja[1] - centro_y
+        if 0 <= distancia < alto * 1.4:
+            elegidos.append((caja, spans, distancia))
+    return elegidos
+
+
+def collect_fraction_regions(page) -> list[MathRegion]:
+    """
+    Busca las fracciones de la página. Una fracción no deja rastro en el texto
+    extraído: el numerador y el denominador salen como dos trozos sueltos y la
+    raya no sale en absoluto. Aquí se localiza la raya en los gráficos de la
+    página y se recogen los renglones que tiene justo encima y justo debajo.
+    """
+    barras = _fraction_bars(page)
+    if not barras:
+        return []
+
+    renglones = _lines_with_spans(page)
+    regiones: list[MathRegion] = []
+    usadas: set[tuple] = set()
+
+    for barra in barras:
+        arriba = _candidatos_a_lado(renglones, barra, arriba=True)
+        abajo = _candidatos_a_lado(renglones, barra, arriba=False)
+        if not arriba or not abajo:
+            continue
+
+        # Una raya de fracción está a la misma distancia del numerador que del
+        # denominador. Un subrayado está pegado a su texto y lejos del de
+        # abajo, que además es otro párrafo.
+        hueco_arriba = min(d for _, _, d in arriba)
+        hueco_abajo = min(d for _, _, d in abajo)
+        mayor = max(hueco_arriba, hueco_abajo, 1.0)
+        if abs(hueco_arriba - hueco_abajo) > mayor * 0.65 + 1.5:
+            continue
+
+        partes = [(c, s) for c, s, _ in arriba] + [(c, s) for c, s, _ in abajo]
+
+        # Y por encima de todo: una fracción lleva tipografía matemática.
+        if not any(_is_math_font(span) for _, spans in partes for span in spans):
+            continue
+
+        rect = _union([barra] + [c for c, _ in partes])
+
+        # El extractor parte el numerador en varios trozos (el signo, la raíz,
+        # el radicando…). Se recogen todos los que caen dentro del rectángulo,
+        # que es el texto que de verdad va a aparecer en el Markdown.
+        dentro = [
+            (caja, spans) for caja, spans in renglones
+            if _dentro(caja, rect)
+        ]
+        if dentro:
+            partes = dentro
+            rect = _union([barra] + [c for c, _ in dentro])
+
+        if rect in usadas:
+            continue
+        usadas.add(rect)
+
+        # Sin reordenar: los renglones vienen en el mismo orden en que el
+        # extractor los va a escribir en el Markdown, y es ese orden —no el
+        # geométrico— el que hay que reproducir para poder sustituirlos. El
+        # trazo de una raíz, por ejemplo, se compone alto pero se lee después
+        # del signo que lo precede.
+        piezas = [
+            "".join(s["text"] for s in spans).strip() for _, spans in partes
+        ]
+        piezas = [p for p in piezas if p]
+        plain = "".join(piezas)
+        if len(plain) < 2:
+            continue
+
+        propias = {tuple(c) for c, _ in partes}
+        intrusos = tuple(
+            caja for caja, _ in renglones
+            if tuple(caja) not in propias and _intersecta(caja, rect)
+        )
+
+        regiones.append(MathRegion(
+            rect=(rect[0] - 3, rect[1] - 1, rect[2] + 3, rect[3] + 1),
+            plain=plain,
+            pattern=_tolerant_plain_pattern(piezas),
+            exclude=intrusos,
+        ))
+
+    return regiones
+
+
+# Basura que el extractor intercala dentro de una fórmula: marcas de cursiva y
+# negrita, los corchetes con que señala los superíndices, y espacios sueltos.
+_BASURA = r"[\s_*`\[\]]{0,6}"
+
+
+def _tolerant_plain_pattern(piezas: list[str]) -> str:
+    """
+    Patrón que reconoce la fórmula en el Markdown por muy troceada que venga.
+
+    El extractor no escribe «−b±√b2−4ac2a» de un tirón: lo parte en cursivas,
+    marca el exponente con corchetes y mete espacios, de modo que acaba como
+    «_−b±√b_[2] _−_ 4 _ac_ 2 _a_». Por eso el patrón se construye carácter a
+    carácter, admitiendo ese ruido entre uno y el siguiente.
+    """
+    texto = "".join(piezas)
+    if len(texto) < 4:
+        return r"(?!)"                       # demasiado corto: no arriesgar
+
+    partes = [r"(?<![A-Za-z0-9])", _EMPHASIS]
+    for indice, caracter in enumerate(texto):
+        if indice:
+            partes.append(_BASURA)
+        partes.append(re.escape(caracter))
+    partes.append(_EMPHASIS)
+    return "".join(partes)
+
+
+# ────────────────────────────────────────────────────────────
+# Agrupación de ecuaciones para el OCR
+# ────────────────────────────────────────────────────────────
+
+@dataclass
+class EquationCluster:
+    """
+    Un conjunto de trozos que en realidad son una sola ecuación.
+
+    El extractor parte una ecuación destacada en varios renglones —el
+    operador, sus límites, el numerador, el denominador—, y a veces en varios
+    bloques. Aquí se vuelven a juntar para saber qué rectángulo hay que
+    recortar si se va a pasar por el OCR.
+    """
+
+    rect: tuple[float, float, float, float]
+    members: list[DisplayEquation]
+    has_fraction: bool
+
+    @property
+    def y(self) -> float:
+        return min((m.y for m in self.members), default=self.rect[1])
+
+
+def cluster_equations(
+    page,
+    equations: list[DisplayEquation],
+    regiones: Optional[list[MathRegion]] = None,
+) -> list[EquationCluster]:
+    """
+    Junta los trozos contiguos de una misma ecuación y marca cuáles contienen
+    una fracción.
+
+    Esa marca es la que decide el método: donde hay una fracción, la fórmula
+    está apilada y solo el OCR puede leerla; donde no la hay, la
+    reconstrucción por geometría es más de fiar que el modelo, porque lee los
+    caracteres del PDF en vez de adivinarlos.
+
+    Se comprueban las fracciones ya validadas, no las rayas sueltas: el trazo
+    horizontal de una raíz cuadrada también es una raya, y no es una fracción.
+    """
+    if not equations:
+        return []
+
+    if regiones is None:
+        regiones = collect_fraction_regions(page)
+    ordenadas = sorted(equations, key=lambda e: (e.rect[1], e.rect[0]))
+
+    grupos: list[list[DisplayEquation]] = []
+    for ecuacion in ordenadas:
+        if grupos:
+            actual = _union([m.rect for m in grupos[-1]])
+            hueco = ecuacion.rect[1] - actual[3]
+            solapa = min(actual[2], ecuacion.rect[2]) - max(actual[0], ecuacion.rect[0])
+            if hueco < 14 and solapa > -18:
+                grupos[-1].append(ecuacion)
+                continue
+        grupos.append([ecuacion])
+
+    racimos: list[EquationCluster] = []
+    for grupo in grupos:
+        rect = _union([m.rect for m in grupo])
+        dentro = [r for r in regiones if _intersecta(r.rect, rect)]
+        if dentro:
+            # La fracción puede sobresalir por arriba o por abajo del recorte.
+            rect = _union([rect] + [r.rect for r in dentro])
+            rect = (rect[0] - 4, rect[1] - 3, rect[2] + 4, rect[3] + 3)
+        racimos.append(EquationCluster(
+            rect=rect, members=grupo, has_fraction=bool(dentro),
+        ))
+    return racimos
+
+
+def region_plain_text(page, rect) -> str:
+    """
+    Texto que el extractor saca de una región, en el mismo orden en que lo va
+    a escribir.
+
+    Hace falta porque una ecuación centrada no siempre acaba convertida en
+    imagen: según cómo se hayan cargado las bibliotecas, el extractor la
+    devuelve como texto suelto y descuadrado. Teniendo ese texto se puede
+    localizar y cambiar por la reconstrucción, salga como salga.
+    """
+    piezas = [
+        "".join(span["text"] for span in spans).strip()
+        for caja, spans in _lines_with_spans(page)
+        if _dentro(caja, rect, 2.0)
+    ]
+    return "".join(pieza for pieza in piezas if pieza)
+
+
+def pattern_for_plain(plain: str) -> str:
+    """Patrón tolerante para localizar ese texto dentro del Markdown."""
+    return _tolerant_plain_pattern([plain])
+
+
+def has_font_math(page) -> bool:
+    """¿La página usa fuentes matemáticas? Sirve para avisar al usuario."""
+    try:
+        return any(MATH_FONT_RE.search(font[3] or "") for font in page.get_fonts(full=False))
+    except Exception:
+        return False
