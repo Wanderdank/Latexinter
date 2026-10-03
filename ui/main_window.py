@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from PyQt5.QtCore import QSettings, QSize, Qt, QTimer
+from PyQt5.QtCore import QSettings, QSize, QStandardPaths, Qt, QTimer
 from PyQt5.QtWidgets import (
     QAction,
     QActionGroup,
@@ -30,6 +30,7 @@ from PyQt5.QtWidgets import (
 )
 
 from converters import SUPPORTED_EXTENSIONS, dependency_report
+from converters.textfiles import RecoveryStore
 from converters.tools import synctex_available
 
 from . import theme
@@ -59,6 +60,8 @@ ATAJOS = """
     <td><b>Ctrl+M</b></td><td>Modo matemático</td></tr>
 <tr><td><b>Tab</b> / <b>Mayús+Tab</b></td><td>Sangrar</td>
     <td><b>Ctrl+D</b></td><td>Duplicar la línea</td></tr>
+<tr><td><b>Mayús+F5</b></td><td>Detener la compilación</td>
+    <td></td><td></td></tr>
 </table>
 """
 
@@ -115,8 +118,10 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(QSize(1000, 640))
         self.setAcceptDrops(True)
 
+        self.recuperacion = self._abrir_recuperacion()
+
         self.paginas = QTabWidget()
-        self.editor_page = EditorPage()
+        self.editor_page = EditorPage(self.recuperacion)
         self.converter_page = ConverterPanel(self.scratch_dir)
         self.converter_page.documentReady.connect(self._abrir_desde_conversor)
 
@@ -146,6 +151,8 @@ class MainWindow(QMainWindow):
         if self.editor_page.documentos.count() == 0:
             self.editor_page.new_document()
         self._actualizar_titulo()
+        # Después de mostrarse la ventana, para que el aviso salga encima.
+        QTimer.singleShot(0, self._ofrecer_recuperacion)
 
     # ════════════════════════════════════════════════════════
     # Acciones
@@ -190,6 +197,8 @@ class MainWindow(QMainWindow):
         )
 
         self.a_compilar = self._accion("Compilar", "F5", "Compilar el documento principal", editor.compile)
+        self.a_detener = self._accion("Detener la compilación", "Shift+F5", "", editor.cancel_compile)
+        self.a_detener.setEnabled(False)
         self.a_auto = self._accion(
             "Compilar al escribir", None,
             "Recompila sola tras dos segundos sin teclear",
@@ -250,6 +259,7 @@ class MainWindow(QMainWindow):
 
         compilar = barra.addMenu("&Compilar")
         compilar.addAction(self.a_compilar)
+        compilar.addAction(self.a_detener)
         compilar.addAction(self.a_auto)
         compilar.addAction(self.a_sync)
         compilar.addSeparator()
@@ -511,6 +521,7 @@ class MainWindow(QMainWindow):
         self.estado_compilacion.setText(texto)
         self.estado_compilacion.setStyleSheet(f"color: {color}; padding: 0 8px;")
         self.a_compilar.setEnabled(estado != "compilando")
+        self.a_detener.setEnabled(estado == "compilando")
 
     def _actualizar_palabras(self) -> None:
         total = self.editor_page.quick_word_count()
@@ -536,6 +547,50 @@ class MainWindow(QMainWindow):
             self._actualizar_titulo()
         else:
             self.setWindowTitle(f"Conversor — {APP_NAME}")
+
+    # ════════════════════════════════════════════════════════
+    # Recuperación tras un cierre inesperado
+    # ════════════════════════════════════════════════════════
+
+    def _abrir_recuperacion(self) -> Optional[RecoveryStore]:
+        carpeta = QStandardPaths.writableLocation(QStandardPaths.AppDataLocation)
+        if not carpeta:
+            return None
+        try:
+            return RecoveryStore(Path(carpeta) / "recuperacion")
+        except OSError:
+            return None             # sin copias, pero la aplicación funciona
+
+    def _ofrecer_recuperacion(self) -> None:
+        if self.recuperacion is None:
+            return
+        documentos = self.recuperacion.orphans()
+        if not documentos:
+            return
+
+        nombres = "\n".join(
+            f"  · {d.path if d.path else 'Documento sin título'}" for d in documentos
+        )
+        caja = QMessageBox(self)
+        caja.setWindowTitle(APP_NAME)
+        caja.setIcon(QMessageBox.Question)
+        caja.setText(
+            f"{APP_NAME} se cerró sin que se guardaran estos cambios:\n\n"
+            f"{nombres}\n\n¿Recuperarlos?"
+        )
+        recuperar = caja.addButton("Recuperar", QMessageBox.AcceptRole)
+        descartar = caja.addButton("Descartar", QMessageBox.DestructiveRole)
+        caja.addButton("Ahora no", QMessageBox.RejectRole)
+        caja.setDefaultButton(recuperar)
+        caja.exec_()
+
+        if caja.clickedButton() is recuperar:
+            self.paginas.setCurrentIndex(0)
+            self.editor_page.restore(documentos)
+            self.recuperacion.forget(documentos)
+            self._mensaje(f"{len(documentos)} documentos recuperados. Guárdalos con Ctrl+S.", 6000)
+        elif caja.clickedButton() is descartar:
+            self.recuperacion.forget(documentos)
 
     # ════════════════════════════════════════════════════════
     # Recientes y ajustes
@@ -644,5 +699,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
 
+        if self.recuperacion is not None:
+            self.recuperacion.close()
         self._guardar_ajustes(ultimo)
         event.accept()

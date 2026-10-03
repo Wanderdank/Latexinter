@@ -22,9 +22,15 @@ runs on your machine. There's no browser and nothing gets uploaded.
   apart, and marks multi-line formulas from start to end.
 - Find and replace with regular expressions.
 - Templates: article, report, Beamer slides, thesis, letter, CV and exam.
+- Files are saved the way they were: an old Latin-1 or Windows-1252 `.tex`
+  keeps its encoding and line endings. Saving is atomic, so a file is never
+  left half-written.
+- **Crash recovery:** unsaved changes are backed up every few seconds. If
+  Latexinter closes unexpectedly, it offers to restore them on the next start.
 
 **Compiling**
 - `F5` compiles. **Compile as you type** recompiles two seconds after you stop typing.
+  `Shift+F5` stops a compile and kills `pdflatex`, so it isn't left running in the background.
 - `pdflatex`, `xelatex` or `lualatex`. Runs `bibtex`/`biber` and extra passes when needed.
 - Errors from the `.log` (plus `chktex` style warnings) show up in a panel.
   Click one to jump to the line.

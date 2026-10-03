@@ -32,7 +32,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from converters import ConversionError, latex_to_pdf
+from converters import Cancelled, CancelToken, ConversionError, cancellable, latex_to_pdf
+from converters.textfiles import Recovered, RecoveryStore, TextFormat
 from converters.tools import (
     Problem,
     forward_search,
@@ -62,24 +63,29 @@ class CompileWorker(QThread):
     message = pyqtSignal(str)
     finished_ok = pyqtSignal(object, object)    # ConversionResult, problemas
     failed = pyqtSignal(str, object)            # mensaje, problemas
+    cancelled = pyqtSignal()
 
     def __init__(self, tex_path: Path, engine: str, usar_chktex: bool = True):
         super().__init__()
         self.tex_path = Path(tex_path)
         self.engine = engine
         self.usar_chktex = usar_chktex
+        self.cancelacion = CancelToken()
 
     def run(self) -> None:
         try:
-            resultado = latex_to_pdf(
-                self.tex_path,
-                engine=self.engine,
-                # Los auxiliares se conservan: sin el .synctex no hay salto
-                # entre el código y el PDF, y sin el .aux no hay referencias.
-                clean_aux=False,
-                synctex=True,
-                logger=self.message.emit,
-            )
+            with cancellable(self.cancelacion):
+                resultado = latex_to_pdf(
+                    self.tex_path,
+                    engine=self.engine,
+                    # Los auxiliares se conservan: sin el .synctex no hay salto
+                    # entre el código y el PDF, y sin el .aux no hay referencias.
+                    clean_aux=False,
+                    synctex=True,
+                    logger=self.message.emit,
+                )
+        except Cancelled:
+            self.cancelled.emit()
         except ConversionError as exc:
             self.failed.emit(str(exc), self._problemas())
         except Exception:
@@ -159,8 +165,9 @@ class EditorPage(QWidget):
     documentChanged = pyqtSignal()               # cambió la pestaña activa o su estado
     compileStateChanged = pyqtSignal(str)        # inactivo | compilando | ok | error
 
-    def __init__(self, parent=None):
+    def __init__(self, recuperacion: Optional[RecoveryStore] = None, parent=None):
         super().__init__(parent)
+        self.recuperacion = recuperacion
         self.engine = "pdflatex"
         self.auto_compilar = False
         self.usar_chktex = True
@@ -196,6 +203,12 @@ class EditorPage(QWidget):
         self._temporizador_esquema.setSingleShot(True)
         self._temporizador_esquema.setInterval(600)
         self._temporizador_esquema.timeout.connect(self._refrescar_esquema)
+
+        # Copias de lo que no está guardado, por si la aplicación se cierra de golpe
+        self._temporizador_copias = QTimer(self)
+        self._temporizador_copias.setSingleShot(True)
+        self._temporizador_copias.setInterval(3000)
+        self._temporizador_copias.timeout.connect(self._guardar_copias)
 
     # ════════════════════════════════════════════════════════
     # Construcción
@@ -357,6 +370,10 @@ class EditorPage(QWidget):
         self._cerrar_pestana_intacta()
         self._add_document_tab(editor, path.name)
         self.archivos.set_root(path.parent)
+        if editor.text_format.encoding not in ("utf-8", "utf-8-sig"):
+            self.statusMessage.emit(
+                f"{path.name} está en {editor.text_format.label}: se guardará igual.", 5000
+            )
 
         if path.suffix.lower() == ".tex" and self.documento_principal is None:
             self.set_main_document(path)
@@ -382,6 +399,7 @@ class EditorPage(QWidget):
                 return False
             if respuesta == QMessageBox.Save and not self.save_document(widget):
                 return False
+        self._descartar_copia(widget)
         self.documentos.removeTab(indice)
         widget.deleteLater()
         return True
@@ -398,10 +416,7 @@ class EditorPage(QWidget):
             return False
         if editor.path is None:
             return self.save_document_as(editor)
-        try:
-            editor.save()
-        except OSError as exc:
-            QMessageBox.warning(self, "Latexinter", f"No se pudo guardar:\n{exc}")
+        if not self._guardar(editor):
             return False
 
         self._actualizar_titulos()
@@ -418,16 +433,49 @@ class EditorPage(QWidget):
         ruta, _ = QFileDialog.getSaveFileName(self, "Guardar como", inicio, FILTRO_TEX)
         if not ruta:
             return False
-        try:
-            editor.save(Path(ruta))
-        except OSError as exc:
-            QMessageBox.warning(self, "Latexinter", f"No se pudo guardar:\n{exc}")
+        if not self._guardar(editor, Path(ruta)):
             return False
 
         self._actualizar_titulos()
         self.archivos.set_root(editor.path.parent)
         if self.documento_principal is None:
             self.set_main_document(editor.path)
+        return True
+
+    def _guardar(self, editor: LatexEditor, ruta: Optional[Path] = None) -> bool:
+        """Guarda avisando de los errores. Devuelve si se guardó."""
+        try:
+            editor.save(ruta)
+        except UnicodeEncodeError as exc:
+            if not self._ofrecer_utf8(editor, exc):
+                return False
+            return self._guardar(editor, ruta)
+        except OSError as exc:
+            QMessageBox.warning(self, "Latexinter", f"No se pudo guardar:\n{exc}")
+            return False
+        self._descartar_copia(editor)
+        return True
+
+    def _ofrecer_utf8(self, editor: LatexEditor, exc: UnicodeEncodeError) -> bool:
+        """
+        El archivo está en una codificación antigua y el texto ya no cabe en
+        ella. Pasarlo a UTF-8 es lo razonable, pero si el preámbulo declara
+        otra con inputenc hay que cambiarla también.
+        """
+        caracter = exc.object[exc.start:exc.end]
+        respuesta = QMessageBox.question(
+            self, "Latexinter",
+            f"El archivo está en {editor.text_format.label} y «{caracter}» no "
+            "se puede escribir en esa codificación.\n\n"
+            "¿Guardarlo en UTF-8? Si el preámbulo tiene "
+            "\\usepackage[latin1]{inputenc} o parecido, cámbialo por "
+            "\\usepackage[utf8]{inputenc}.",
+            QMessageBox.Yes | QMessageBox.Cancel,
+            QMessageBox.Yes,
+        )
+        if respuesta != QMessageBox.Yes:
+            return False
+        editor.text_format = TextFormat("utf-8", editor.text_format.newline)
         return True
 
     def _actualizar_titulos(self) -> None:
@@ -452,6 +500,8 @@ class EditorPage(QWidget):
 
     def _al_escribir(self) -> None:
         self._temporizador_esquema.start()
+        if self.recuperacion is not None:
+            self._temporizador_copias.start()
         if self.auto_compilar:
             self._temporizador_auto.start()
 
@@ -514,8 +564,16 @@ class EditorPage(QWidget):
             if abierto.path is not None and abierto.document().isModified():
                 try:
                     abierto.save()
+                except UnicodeEncodeError:
+                    self.statusMessage.emit(
+                        f"{abierto.path.name} no se guardó: tiene caracteres que "
+                        f"{abierto.text_format.label} no admite. Guárdalo con Ctrl+S.",
+                        8000,
+                    )
                 except OSError:
                     pass
+                else:
+                    self._descartar_copia(abierto)
         self._actualizar_titulos()
 
         self.registro.clear()
@@ -526,6 +584,7 @@ class EditorPage(QWidget):
         self.worker.message.connect(self.registro.appendPlainText)
         self.worker.finished_ok.connect(self._compilacion_ok)
         self.worker.failed.connect(self._compilacion_fallida)
+        self.worker.cancelled.connect(self._compilacion_detenida)
         self.worker.finished.connect(self._compilacion_terminada)
         self.worker.start()
 
@@ -552,6 +611,12 @@ class EditorPage(QWidget):
         self.inferior.setCurrentWidget(self.problemas)
         self.compileStateChanged.emit("error")
         self.statusMessage.emit("La compilación falló. Mira el panel de problemas.", 6000)
+
+    def _compilacion_detenida(self) -> None:
+        self.registro.appendPlainText("")
+        self.registro.appendPlainText("■ Compilación detenida.")
+        self.compileStateChanged.emit("inactivo")
+        self.statusMessage.emit("Compilación detenida", 3000)
 
     def _compilacion_terminada(self) -> None:
         if self._pendiente_recompilar:
@@ -592,13 +657,74 @@ class EditorPage(QWidget):
     def is_busy(self) -> bool:
         return self.worker is not None and self.worker.isRunning()
 
-    def stop(self) -> None:
-        if self.is_busy():
+    def cancel_compile(self) -> None:
+        """Detiene la compilación en marcha, matando a pdflatex y compañía."""
+        self._pendiente_recompilar = False
+        self._temporizador_auto.stop()
+        if not self.is_busy():
+            return
+        self.worker.cancelacion.cancel()
+        if not self.worker.wait(5000):
+            # Algo que no es un proceso externo se ha quedado colgado.
             self.worker.terminate()
-            self.worker.wait(3000)
+            self.worker.wait(2000)
+
+    def stop(self) -> None:
+        self.cancel_compile()
         if self._ocr_worker is not None and self._ocr_worker.isRunning():
             self._ocr_worker.terminate()
             self._ocr_worker.wait(3000)
+
+    # ════════════════════════════════════════════════════════
+    # Copias de recuperación
+    # ════════════════════════════════════════════════════════
+
+    def _guardar_copias(self) -> None:
+        if self.recuperacion is None:
+            return
+        try:
+            for editor in self._editores():
+                if editor.document().isModified():
+                    self.recuperacion.save(
+                        editor.recovery_id, editor.path,
+                        editor.source_text(), editor.text_format,
+                    )
+                else:
+                    self.recuperacion.discard(editor.recovery_id)
+        except OSError as exc:
+            self.statusMessage.emit(f"No se pudo guardar la copia de recuperación: {exc}", 5000)
+
+    def _descartar_copia(self, editor: LatexEditor) -> None:
+        if self.recuperacion is not None:
+            self.recuperacion.discard(editor.recovery_id)
+
+    def restore(self, documentos: list[Recovered]) -> None:
+        """
+        Abre lo recuperado como cambios sin guardar. Si el archivo sigue en el
+        disco, el texto recuperado se pone encima en un solo paso: deshacer
+        devuelve la versión guardada.
+        """
+        for documento in documentos:
+            editor = None
+            if documento.path is not None and documento.path.exists():
+                self.open_file(documento.path)
+                abierto = self._buscar_abierto(documento.path)
+                if abierto is not None:
+                    editor = self._editores()[abierto]
+            if editor is None:
+                nombre = documento.path.name if documento.path else "recuperado.tex"
+                editor = self.new_document(documento.text, nombre)
+                editor.path = documento.path
+            else:
+                cursor = editor.textCursor()
+                cursor.beginEditBlock()
+                cursor.select(QTextCursor.Document)
+                cursor.insertText(documento.text)
+                cursor.endEditBlock()
+            editor.text_format = documento.format
+            editor.document().setModified(True)
+        self._actualizar_titulos()
+        self._guardar_copias()
 
     # ════════════════════════════════════════════════════════
     # SyncTeX

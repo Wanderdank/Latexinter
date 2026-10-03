@@ -12,10 +12,12 @@ import os
 import subprocess
 import shutil
 import sys
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Callable, Optional, Sequence
+from typing import Callable, Iterator, Optional, Sequence
 
 # Una función que recibe una línea de texto y la muestra donde corresponda
 # (consola en el CLI, panel de registro en la GUI).
@@ -41,6 +43,13 @@ class MissingDependency(ConversionError):
         if hint:
             msg += f"\n{hint}"
         super().__init__(msg)
+
+
+class Cancelled(ConversionError):
+    """El usuario detuvo el trabajo (o se cerró la aplicación)."""
+
+    def __init__(self) -> None:
+        super().__init__("Cancelado.")
 
 
 INSTALL_HINTS = {
@@ -139,6 +148,73 @@ def dependency_report() -> dict[str, Optional[str]]:
 # Procesos externos
 # ────────────────────────────────────────────────────────────
 
+class CancelToken:
+    """
+    Permite detener desde otro hilo los programas externos que lanza un hilo
+    de trabajo. Matar el hilo no basta: pdflatex seguiría vivo, y en Windows
+    mantendría bloqueado el PDF.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._procesos: set[subprocess.Popen] = set()
+        self.cancelled = False
+
+    def cancel(self) -> None:
+        with self._lock:
+            self.cancelled = True
+            procesos = list(self._procesos)
+        for proceso in procesos:
+            _kill(proceso)
+
+    def _register(self, proceso: subprocess.Popen) -> None:
+        with self._lock:
+            self._procesos.add(proceso)
+            cancelado = self.cancelled
+        if cancelado:
+            _kill(proceso)
+
+    def _unregister(self, proceso: subprocess.Popen) -> None:
+        with self._lock:
+            self._procesos.discard(proceso)
+
+
+_hilo = threading.local()
+
+
+@contextmanager
+def cancellable(token: CancelToken) -> Iterator[CancelToken]:
+    """Lo que se ejecute dentro, en este hilo, se puede detener con el token."""
+    anterior = getattr(_hilo, "token", None)
+    _hilo.token = token
+    try:
+        yield token
+    finally:
+        _hilo.token = anterior
+
+
+def _current_token() -> Optional[CancelToken]:
+    return getattr(_hilo, "token", None)
+
+
+def _kill(proceso: subprocess.Popen) -> None:
+    """Mata el proceso y lo que haya lanzado (MiKTeX instala paquetes así)."""
+    if proceso.poll() is not None:
+        return
+    if sys.platform == "win32":
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proceso.pid)],
+                capture_output=True, timeout=10, creationflags=_NO_WINDOW,
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+    try:
+        proceso.kill()
+    except OSError:
+        pass
+
+
 def run_command(
     cmd: Sequence[str],
     *,
@@ -146,26 +222,54 @@ def run_command(
     logger: Optional[Logger] = None,
     timeout: Optional[int] = 600,
 ) -> subprocess.CompletedProcess:
-    """Ejecuta un comando y captura su salida (sin ventana de consola)."""
+    """
+    Ejecuta un comando y captura su salida (sin ventana de consola). Si el
+    hilo trabaja dentro de cancellable(), el comando se puede detener.
+    """
     log = as_logger(logger)
     log(f"$ {' '.join(str(c) for c in cmd)}")
+
+    token = _current_token()
+    if token is not None and token.cancelled:
+        raise Cancelled()
+
+    argumentos = [str(c) for c in cmd]
     try:
-        return subprocess.run(
-            [str(c) for c in cmd],
+        proceso = subprocess.Popen(
+            argumentos,
             cwd=str(cwd) if cwd else None,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=timeout,
             creationflags=_NO_WINDOW,
         )
     except FileNotFoundError as exc:
         raise MissingDependency(str(cmd[0]), INSTALL_HINTS.get(str(cmd[0]), "")) from exc
-    except subprocess.TimeoutExpired as exc:
-        raise ConversionError(
-            f"'{cmd[0]}' tardó más de {timeout} s y se canceló."
-        ) from exc
+
+    if token is not None:
+        token._register(proceso)
+    try:
+        with proceso:
+            try:
+                stdout, stderr = proceso.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired as exc:
+                _kill(proceso)
+                proceso.communicate()
+                raise ConversionError(
+                    f"'{cmd[0]}' tardó más de {timeout} s y se canceló."
+                ) from exc
+            except BaseException:
+                _kill(proceso)
+                raise
+    finally:
+        if token is not None:
+            token._unregister(proceso)
+
+    if token is not None and token.cancelled:
+        raise Cancelled()
+    return subprocess.CompletedProcess(argumentos, proceso.returncode, stdout, stderr)
 
 
 def tail(text: str, lines: int = 25) -> str:

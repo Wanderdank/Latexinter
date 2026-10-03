@@ -10,6 +10,7 @@ tabulador, comentar con un atajo y fragmentos que se insertan enteros.
 from __future__ import annotations
 
 import re
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -27,6 +28,8 @@ from PyQt5.QtWidgets import (
     QTextEdit,
     QWidget,
 )
+
+from converters.textfiles import TextFormat, read_source, write_source
 
 from . import theme
 from .latex_syntax import CURSOR, SNIPPETS_POR_NOMBRE, LatexHighlighter, completion_entries
@@ -61,6 +64,9 @@ class LatexEditor(QPlainTextEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.path: Optional[Path] = None
+        self.text_format = TextFormat()
+        # Nombre de su copia de recuperación mientras tenga cambios sin guardar.
+        self.recovery_id = uuid.uuid4().hex
 
         self.setFont(theme.mono_font(11))
         self.setTabStopDistance(QFontMetrics(self.font()).horizontalAdvance(" ") * 4)
@@ -527,16 +533,31 @@ class LatexEditor(QPlainTextEdit):
     # ════════════════════════════════════════════════════════
 
     def load(self, path: Path) -> None:
+        texto, self.text_format = read_source(path)
         self.path = Path(path)
-        self.setPlainText(self.path.read_text(encoding="utf-8", errors="replace"))
+        self.setPlainText(texto)
         self.document().setModified(False)
 
+    def source_text(self) -> str:
+        """
+        El texto tal cual, para guardarlo. toPlainText() cambia los espacios
+        duros (U+00A0) por espacios normales, y guardar alteraría el archivo.
+        """
+        return (
+            self.document().toRawText()
+            .replace("\u2029", "\n")
+            .replace("\u2028", "\n")
+        )
+
     def save(self, path: Optional[Path] = None) -> Path:
+        """
+        Lanza UnicodeEncodeError si el texto tiene caracteres que no caben en
+        la codificación del archivo; en ese caso el disco no se toca.
+        """
         destino = Path(path) if path else self.path
         if destino is None:
             raise ValueError("El documento no tiene todavía un archivo asociado.")
-        destino.parent.mkdir(parents=True, exist_ok=True)
-        destino.write_text(self.toPlainText(), encoding="utf-8")
+        write_source(destino, self.source_text(), self.text_format)
         self.path = destino
         self.document().setModified(False)
         return destino

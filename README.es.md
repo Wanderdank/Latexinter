@@ -56,11 +56,17 @@ el código y abajo los problemas; a la derecha, el PDF.
 - `Ctrl+B` negrita, `Ctrl+I` cursiva, `Ctrl+M` modo matemático,
   `Ctrl+7` comentar, `Ctrl+D` duplicar la línea, `Tab` sangrar.
 - Buscar y reemplazar con `Ctrl+F` y `Ctrl+H`, con expresiones regulares.
+- Los archivos se guardan como estaban: un `.tex` antiguo en Latin-1 o
+  Windows-1252 sigue en esa codificación, con sus finales de línea. El guardado
+  es atómico (el archivo nunca queda a medias).
+- **Recuperación:** lo que no está guardado se copia cada pocos segundos. Si
+  Latexinter se cierra de golpe, al volver a abrirlo ofrece recuperarlo.
 
 **Compilar**
 
 - `F5` compila; con **Compilar al escribir** se recompila sola dos segundos
-  después de dejar de teclear.
+  después de dejar de teclear. `Mayús+F5` detiene la compilación (y mata a
+  `pdflatex`, que no se queda colgado en segundo plano).
 - El PDF conserva la posición del scroll entre compilaciones, así que el
   documento no salta al principio cada vez.
 - Los errores del `.log` salen en el panel inferior con su archivo y su línea:

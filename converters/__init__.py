@@ -15,10 +15,13 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .common import (
+    Cancelled,
+    CancelToken,
     ConversionError,
     ConversionResult,
     Logger,
     MissingDependency,
+    cancellable,
     dependency_report,
     human_size,
     open_in_explorer,
@@ -31,11 +34,14 @@ from .pdf_to_latex import pdf_to_latex
 
 __all__ = [
     "CONVERSIONS",
+    "Cancelled",
+    "CancelToken",
     "Conversion",
     "ConversionError",
     "ConversionResult",
     "MissingDependency",
     "SUPPORTED_EXTENSIONS",
+    "cancellable",
     "conversions_for",
     "convert",
     "dependency_report",

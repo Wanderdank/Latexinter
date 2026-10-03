@@ -36,8 +36,10 @@ from PyQt5.QtWidgets import (
 from converters import (
     CONVERSIONS,
     SUPPORTED_EXTENSIONS,
+    CancelToken,
     ConversionError,
     ConversionResult,
+    cancellable,
     conversions_for,
     convert,
     human_size,
@@ -137,15 +139,17 @@ class ConversionWorker(QThread):
         self.source = source
         self.output_dir = output_dir
         self.options = options
+        self.cancelacion = CancelToken()
 
     def run(self) -> None:
         try:
-            resultado = convert(
-                self.key, self.source,
-                output_dir=self.output_dir,
-                logger=self.message.emit,
-                **self.options,
-            )
+            with cancellable(self.cancelacion):
+                resultado = convert(
+                    self.key, self.source,
+                    output_dir=self.output_dir,
+                    logger=self.message.emit,
+                    **self.options,
+                )
         except ConversionError as exc:
             self.failed.emit(str(exc))
         except Exception:
@@ -170,17 +174,19 @@ class PreviewWorker(QThread):
     def __init__(self, tex_path: Path):
         super().__init__()
         self.tex_path = Path(tex_path)
+        self.cancelacion = CancelToken()
 
     def run(self) -> None:
         try:
             texto = self.tex_path.read_text(encoding="utf-8", errors="replace")
             # Lo que exige fontspec no compila con pdflatex.
             motor = "xelatex" if "{fontspec}" in texto else "pdflatex"
-            resultado = convert(
-                "tex2pdf", self.tex_path,
-                logger=self.message.emit,
-                engine=motor, clean_aux=False, synctex=True,
-            )
+            with cancellable(self.cancelacion):
+                resultado = convert(
+                    "tex2pdf", self.tex_path,
+                    logger=self.message.emit,
+                    engine=motor, clean_aux=False, synctex=True,
+                )
         except ConversionError as exc:
             self.failed.emit(str(exc))
         except Exception:
@@ -779,5 +785,9 @@ class ConverterPanel(QWidget):
     def stop(self) -> None:
         for hilo in (self.worker, self.preview_worker):
             if hilo is not None and hilo.isRunning():
-                hilo.terminate()
-                hilo.wait(2000)
+                # Primero se matan pandoc y pdflatex; terminate() solo queda
+                # para lo que corre dentro de Python (la extracción, el OCR).
+                hilo.cancelacion.cancel()
+                if not hilo.wait(3000):
+                    hilo.terminate()
+                    hilo.wait(2000)
