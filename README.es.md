@@ -260,10 +260,25 @@ converters/
     latex_to_docx.py    LaTeX → Word
     docx_to_latex.py    Word  → LaTeX
 tests/                  pruebas (pytest)
+bench/                  medición de las fórmulas con papers de arXiv
 installer/              instalador de Windows (PyInstaller + Inno Setup)
 assets/                 ícono
 docs/                   capturas del README
 ```
+
+## Medir la reconstrucción de fórmulas
+
+```bash
+python -m bench.run          # sin OCR
+python -m bench.run --ocr    # con pix2tex
+```
+
+Baja de arXiv los papers de `bench/papers.txt` (PDF y `.tex` original, en
+`bench/cache/`, que no se sube), los convierte, compara cada fórmula con la
+original y compila el resultado. Saca, por paper y por tipo de fórmula
+(índices, fracciones, sumas…), cuántas salieron idénticas, cuánto se parecen y
+cuántos errores da pdflatex, y lo compara con `bench/referencia.json`. Con
+`--referencia` el resultado pasa a ser la nueva referencia.
 
 ## Crear el instalador
 

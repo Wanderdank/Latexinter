@@ -111,6 +111,21 @@ python cli.py tex2docx thesis.tex --toc
 python cli.py docx2tex report.docx
 ```
 
+## Measuring formula recovery
+
+```bash
+python -m bench.run          # without OCR
+python -m bench.run --ocr    # with pix2tex
+```
+
+This downloads the arXiv papers listed in `bench/papers.txt` (the PDF and the
+original `.tex`) into `bench/cache/`, which isn't committed. It converts each
+PDF, compares every formula with the original and compiles the result. For each
+paper and each kind of formula (scripts, fractions, sums…) it reports how many
+came out identical, how similar they are and how many errors pdflatex gives,
+and it compares the totals with `bench/referencia.json`. `--referencia` saves
+the run as the new reference.
+
 ## Building the installer
 
 You need Python 3.12 and [Inno Setup 6](https://jrsoftware.org/isinfo.php)
@@ -142,6 +157,7 @@ app.py, cli.py      desktop app and command line
 ui/                 PyQt5 interface: editor, PDF viewer, panels, converter
 converters/         the conversions, plus the formula reconstruction (pdfmath, mathfix, mathocr)
 tests/              pytest
+bench/              formula recovery benchmark on arXiv papers
 installer/          Windows installer (PyInstaller + Inno Setup)
 ```
 

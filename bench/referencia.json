@@ -1,0 +1,100 @@
+{
+  "sin_ocr": {
+    "total": {
+      "formulas": 3083,
+      "exactas": 12.03,
+      "parecido": 37.84,
+      "errores_latex": 1236,
+      "papers_sin_errores": 1
+    },
+    "en línea": {
+      "formulas": 2548,
+      "exactas": 14.56,
+      "parecido": 41.71
+    },
+    "no trivial": {
+      "formulas": 1929,
+      "exactas": 2.38,
+      "parecido": 32.49
+    },
+    "índices": {
+      "formulas": 1718,
+      "exactas": 12.51,
+      "parecido": 40.5
+    },
+    "destacada": {
+      "formulas": 535,
+      "exactas": 0.0,
+      "parecido": 19.43
+    },
+    "fracciones": {
+      "formulas": 273,
+      "exactas": 0.0,
+      "parecido": 21.24
+    },
+    "sumas e integrales": {
+      "formulas": 182,
+      "exactas": 0.0,
+      "parecido": 14.67
+    },
+    "raíces": {
+      "formulas": 39,
+      "exactas": 0.0,
+      "parecido": 19.71
+    },
+    "matrices": {
+      "formulas": 24,
+      "exactas": 0.0,
+      "parecido": 15.38
+    }
+  },
+  "ocr": {
+    "total": {
+      "formulas": 3083,
+      "exactas": 12.03,
+      "parecido": 38.0,
+      "errores_latex": 1233,
+      "papers_sin_errores": 1
+    },
+    "en línea": {
+      "formulas": 2548,
+      "exactas": 14.56,
+      "parecido": 41.72
+    },
+    "no trivial": {
+      "formulas": 1929,
+      "exactas": 2.38,
+      "parecido": 32.74
+    },
+    "índices": {
+      "formulas": 1718,
+      "exactas": 12.51,
+      "parecido": 40.73
+    },
+    "destacada": {
+      "formulas": 535,
+      "exactas": 0.0,
+      "parecido": 20.3
+    },
+    "fracciones": {
+      "formulas": 273,
+      "exactas": 0.0,
+      "parecido": 22.98
+    },
+    "sumas e integrales": {
+      "formulas": 182,
+      "exactas": 0.0,
+      "parecido": 15.2
+    },
+    "raíces": {
+      "formulas": 39,
+      "exactas": 0.0,
+      "parecido": 19.71
+    },
+    "matrices": {
+      "formulas": 24,
+      "exactas": 0.0,
+      "parecido": 15.52
+    }
+  }
+}

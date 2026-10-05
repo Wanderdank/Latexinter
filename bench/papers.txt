@@ -1,0 +1,16 @@
+# Papers de arXiv con los que se mide la reconstrucción de fórmulas.
+# Cortos (6-12 páginas) y de áreas distintas, para cubrir estilos variados.
+# No cambiar la lista sin guardar una referencia nueva (--referencia):
+# los resultados solo se pueden comparar con los mismos papers.
+
+2303.01918   # math.PR   Moment characterization of the weak disorder phase for directed polymers
+2303.00275   # math.NT   Multi-Stirling numbers of the second kind
+2303.01128   # math.NT   On the symmetry of finite sums of exponentials II
+2303.00487   # math.AP   Temporal regularity of the solution to the incompressible Euler equations
+2303.00437   # math.OC   Assessing the finite-time stability of nonlinear systems
+2303.07198   # hep-th    Generalized uncertainty principle from the regularized self-energy
+2303.00269   # quant-ph  Quench dynamics of edge states in a finite extended SSH chain
+2303.00430   # cond-mat  Spin-1/2 XXZ chain coupled to two Lindblad baths
+2303.00261   # cs.LG     Speeding up EfficientNet
+2303.01117   # stat.ML   In all LikelihoodS: how to reliably select pseudo-labeled data
+2303.00850   # cs.IT     Distortion minimization with age of information and cost constraints

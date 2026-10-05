@@ -36,6 +36,9 @@ documentos/
 /ejemplo_*
 *_imagenes/
 
+# Papers de arXiv de la medición (son de sus autores, no se suben)
+bench/cache/
+
 # Instalador (installer/build.ps1)
 build/
 dist/
