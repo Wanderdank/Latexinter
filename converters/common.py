@@ -92,6 +92,39 @@ class ConversionResult:
 # Dependencias externas
 # ────────────────────────────────────────────────────────────
 
+def refresh_path() -> None:
+    """
+    Añade al PATH del proceso lo que el registro de Windows tenga y falte.
+    Cada programa recibe el PATH al arrancar: si MiKTeX o pandoc se instalan
+    justo antes (el instalador de Latexinter lo hace), sin esto no se
+    encontrarían hasta reiniciar la sesión.
+    """
+    if sys.platform != "win32":
+        return
+    import winreg
+
+    claves = (
+        (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+        (winreg.HKEY_CURRENT_USER, "Environment"),
+    )
+    actuales = os.environ.get("PATH", "").split(os.pathsep)
+    vistas = {os.path.normcase(p.rstrip("\\/")) for p in actuales if p}
+    nuevas: list[str] = []
+    for raiz, subclave in claves:
+        try:
+            with winreg.OpenKey(raiz, subclave) as clave:
+                valor, _ = winreg.QueryValueEx(clave, "Path")
+        except OSError:
+            continue
+        for carpeta in os.path.expandvars(valor).split(os.pathsep):
+            normal = os.path.normcase(carpeta.rstrip("\\/"))
+            if carpeta and normal not in vistas:
+                vistas.add(normal)
+                nuevas.append(carpeta)
+    if nuevas:
+        os.environ["PATH"] = os.pathsep.join([p for p in actuales if p] + nuevas)
+
+
 def find_tool(name: str) -> Optional[str]:
     """Ruta del ejecutable, o None si no está instalado."""
     return shutil.which(name)
@@ -134,6 +167,7 @@ def engine_is_miktex(engine: str = "pdflatex") -> bool:
 
 def dependency_report() -> dict[str, Optional[str]]:
     """Estado de todas las herramientas externas, para mostrarlo en la GUI."""
+    refresh_path()
     report: dict[str, Optional[str]] = {}
     for tool in ("pandoc", "pdflatex", "bibtex"):
         report[tool] = find_tool(tool)
@@ -326,13 +360,15 @@ def resolve_output(
     generados), con overwrite=True se pisa (los artefactos de compilación:
     .pdf y .docx regenerables a partir del .tex).
     """
-    source = Path(source)
+    # Rutas absolutas: pandoc se ejecuta dentro de la carpeta de salida, y una
+    # ruta relativa como «out/doc.tex» acabaría en «out/out/doc.tex».
+    source = Path(source).resolve()
     if output is not None:
-        target = Path(output)
+        target = Path(output).resolve()
         if target.is_dir():
             target = target / (source.stem + suffix)
     else:
-        folder = Path(output_dir) if output_dir else source.parent
+        folder = Path(output_dir).resolve() if output_dir else source.parent
         folder.mkdir(parents=True, exist_ok=True)
         target = folder / (source.stem + suffix)
 

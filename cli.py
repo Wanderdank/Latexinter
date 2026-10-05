@@ -27,6 +27,7 @@ from converters import (  # noqa: E402
     dependency_report,
     human_size,
 )
+from converters.common import refresh_path  # noqa: E402
 
 # La consola de Windows no siempre habla UTF-8.
 if sys.platform == "win32":
@@ -201,6 +202,7 @@ def check_dependencies() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    refresh_path()
 
     if args.comando == "gui":
         from ui import run

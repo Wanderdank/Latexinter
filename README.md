@@ -105,6 +105,19 @@ python cli.py tex2docx thesis.tex --toc
 python cli.py docx2tex report.docx
 ```
 
+## Building the installer
+
+You need Python 3.12 and [Inno Setup 6](https://jrsoftware.org/isinfo.php)
+(`winget install JRSoftware.InnoSetup`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File installer\build.ps1
+```
+
+This produces `dist\Latexinter-<version>-instalador.exe`, about 90 MB. It installs
+without admin rights and, if MiKTeX or pandoc are missing, offers to install
+them with winget. The version comes from `__version__` in `ui/__init__.py`.
+
 ## Tests
 
 ```bash
@@ -123,6 +136,7 @@ app.py, cli.py      desktop app and command line
 ui/                 PyQt5 interface: editor, PDF viewer, panels, converter
 converters/         the conversions, plus the formula reconstruction (pdfmath, mathfix, mathocr)
 tests/              pytest
+installer/          Windows installer (PyInstaller + Inno Setup)
 ```
 
 ## License

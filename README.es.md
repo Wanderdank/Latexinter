@@ -242,6 +242,7 @@ ui/
 converters/
     __init__.py         registro de conversiones y función convert()
     common.py           dependencias, procesos externos, rutas de salida
+    textfiles.py        leer y guardar sin estropear, copias de recuperación
     tools.py            synctex, chktex, recuento y análisis del .log
     mathfix.py          Unicode → LaTeX matemático agrupado
     pdfmath.py          reconstrucción de fórmulas desde la maquetación
@@ -252,8 +253,23 @@ converters/
     latex_to_docx.py    LaTeX → Word
     docx_to_latex.py    Word  → LaTeX
 tests/                  pruebas (pytest)
+installer/              instalador de Windows (PyInstaller + Inno Setup)
+assets/                 ícono
 docs/                   capturas del README
 ```
+
+## Crear el instalador
+
+Hace falta Python 3.12 y [Inno Setup 6](https://jrsoftware.org/isinfo.php)
+(`winget install JRSoftware.InnoSetup`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File installer\build.ps1
+```
+
+Deja `dist\Latexinter-<versión>-instalador.exe` (unos 90 MB). Se instala sin
+permisos de administrador y, si faltan MiKTeX o pandoc, ofrece instalarlos con
+winget. La versión sale de `__version__` en `ui/__init__.py`.
 
 ## Pruebas
 

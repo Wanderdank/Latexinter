@@ -85,3 +85,16 @@ def test_indice_con_puntos_se_cambia_por_tableofcontents():
 def test_encabezados_repetidos_en_cada_pagina():
     pages = [f"Revista X 2024\n{letra}" for letra in "ABCD"]
     assert p.strip_running_heads(pages) == ["A", "B", "C", "D"]
+
+
+# ── Imágenes ────────────────────────────────────────────────
+
+def test_imagenes_relativas_al_tex_y_no_a_la_carpeta_actual(tmp_path, monkeypatch):
+    # pymupdf4llm da la ruta relativa a donde se ejecuta el programa; con
+    # --output-dir out el .tex buscaría «out/doc_imagenes» dentro de «out».
+    (tmp_path / "out" / "doc_imagenes").mkdir(parents=True)
+    (tmp_path / "out" / "doc_imagenes" / "a.png").write_bytes(b"")
+    monkeypatch.chdir(tmp_path)
+    md, total = p._relocate_images("![](out/doc_imagenes/a.png)", tmp_path / "out")
+    assert md == "![](doc_imagenes/a.png)"
+    assert total == 1

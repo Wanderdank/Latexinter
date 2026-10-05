@@ -36,6 +36,10 @@ documentos/
 /ejemplo_*
 *_imagenes/
 
+# Instalador (installer/build.ps1)
+build/
+dist/
+
 # Sistema
 Thumbs.db
 .DS_Store

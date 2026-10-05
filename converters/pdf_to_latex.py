@@ -294,8 +294,9 @@ _IMAGE_LINK = re.compile(r"!\[([^\]]*)\]\(([^)\n]+)\)")
 
 def _relocate_images(md: str, base_dir: Path) -> tuple[str, int]:
     """
-    pymupdf4llm escribe rutas absolutas y con barras de Windows. LaTeX necesita
-    rutas relativas al .tex y con '/'.
+    pymupdf4llm escribe rutas con barras de Windows, absolutas o relativas a la
+    carpeta desde la que se ejecuta el programa. LaTeX necesita rutas
+    relativas al .tex y con '/'.
     """
     count = 0
 
@@ -306,6 +307,8 @@ def _relocate_images(md: str, base_dir: Path) -> tuple[str, int]:
             return match.group(0)
         count += 1
         path = Path(target)
+        if not path.is_absolute() and (Path.cwd() / path).exists():
+            path = Path.cwd() / path
         if path.is_absolute():
             return f"![{alt}]({relative_posix(path, base_dir)})"
         return f"![{alt}]({target.replace(chr(92), '/')})"

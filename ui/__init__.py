@@ -34,10 +34,26 @@ try:
 except ImportError:      # sin PyMuPDF la app arranca igual, sin conversor
     pass
 
+__version__ = "0.1.0"
+
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 SCRATCH_DIR = PROJECT_DIR / "documentos"
+ICONO = PROJECT_DIR / "assets" / "latexinter.ico"
 
-__all__ = ["run", "PROJECT_DIR", "SCRATCH_DIR"]
+# Instalado (empaquetado con PyInstaller), la carpeta del programa no admite
+# escritura: los documentos de trabajo van a «Documentos\Latexinter».
+EMPAQUETADO = getattr(sys, "frozen", False)
+
+__all__ = ["run", "PROJECT_DIR", "SCRATCH_DIR", "__version__"]
+
+
+def _carpeta_de_trabajo() -> Path:
+    if not EMPAQUETADO:
+        return SCRATCH_DIR
+    from PyQt5.QtCore import QStandardPaths
+
+    documentos = QStandardPaths.writableLocation(QStandardPaths.DocumentsLocation)
+    return Path(documentos or Path.home()) / "Latexinter"
 
 
 def _instalar_avisador_de_errores() -> None:
@@ -52,7 +68,8 @@ def _instalar_avisador_de_errores() -> None:
 
     def avisar(tipo, valor, rastro) -> None:
         texto = "".join(traceback.format_exception(tipo, valor, rastro))
-        sys.stderr.write(texto)
+        if sys.stderr is not None:          # instalado no hay consola
+            sys.stderr.write(texto)
         try:
             caja = QMessageBox(QMessageBox.Critical, "Latexinter",
                                f"Error inesperado: {valor}")
@@ -68,12 +85,16 @@ def _instalar_avisador_de_errores() -> None:
 def run(argv: list[str] | None = None) -> int:
     """Arranca la aplicación. Devuelve el código de salida."""
     from PyQt5.QtCore import Qt
+    from PyQt5.QtGui import QIcon
     from PyQt5.QtWidgets import QApplication
+
+    from converters.common import refresh_path
 
     from . import theme
     from .main_window import APP_NAME, MainWindow
 
     argv = list(sys.argv if argv is None else argv)
+    refresh_path()
 
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
@@ -81,12 +102,15 @@ def run(argv: list[str] | None = None) -> int:
     app = QApplication(argv)
     app.setApplicationName(APP_NAME)
     app.setOrganizationName(APP_NAME)
+    app.setApplicationVersion(__version__)
+    if ICONO.exists():
+        app.setWindowIcon(QIcon(str(ICONO)))
     app.setStyleSheet(theme.STYLESHEET)
     app.setFont(theme.ui_font(10))
 
     _instalar_avisador_de_errores()
 
-    ventana = MainWindow(SCRATCH_DIR)
+    ventana = MainWindow(_carpeta_de_trabajo())
     ventana.show()
 
     # Permite abrir archivos directamente:  python app.py documento.tex

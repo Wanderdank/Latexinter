@@ -3,6 +3,7 @@
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -11,6 +12,7 @@ from converters.common import (
     CancelToken,
     ConversionError,
     cancellable,
+    resolve_output,
     run_command,
 )
 
@@ -66,6 +68,14 @@ def test_sin_token_no_cambia_nada_fuera_del_bloque():
     token.cancel()
     # Fuera del bloque el token ya no afecta a este hilo.
     assert run_command([sys.executable, "-c", "pass"]).returncode == 0
+
+
+def test_carpeta_de_salida_relativa_se_vuelve_absoluta(tmp_path, monkeypatch):
+    # pandoc corre dentro de la carpeta de salida: con una ruta relativa el
+    # resultado acababa en «out/out/doc.tex» y la conversión fallaba.
+    monkeypatch.chdir(tmp_path)
+    destino = resolve_output(Path("doc.pdf"), ".tex", output_dir="out")
+    assert destino == tmp_path.resolve() / "out" / "doc.tex"
 
 
 def test_tiempo_agotado():
