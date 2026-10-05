@@ -18,7 +18,14 @@ python app.py
 
 ## Instalación
 
-Dos programas externos y tres paquetes de Python:
+**Windows:** baja `Latexinter-…-instalador.exe` de
+[la última versión](https://github.com/Wanderdank/Latexinter/releases/latest)
+y ábrelo. No pide permisos de administrador y, si faltan MiKTeX o pandoc, los
+instala solo. El instalador todavía no está firmado, así que Windows puede
+avisar con «Windows protegió su PC»: *Más información* → *Ejecutar de todas
+formas*.
+
+**Desde el código:** dos programas externos y tres paquetes de Python:
 
 ```bash
 winget install --id JohnMacFarlane.Pandoc

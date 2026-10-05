@@ -84,7 +84,13 @@ It also cleans up the usual PDF debris:
 
 ## Install
 
-You need Python 3.12+, two external programs and a few packages:
+**Windows:** download `Latexinter-…-instalador.exe` from
+[the latest release](https://github.com/Wanderdank/Latexinter/releases/latest)
+and run it. It doesn't need admin rights, and it installs MiKTeX and pandoc for
+you if they're missing. The installer isn't signed yet, so Windows may show
+"Windows protected your PC": click *More info* → *Run anyway*.
+
+**From source:** you need Python 3.12+, two external programs and a few packages:
 
 ```bash
 winget install --id JohnMacFarlane.Pandoc
