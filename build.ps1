@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Latexinter - conversiones entre PDF, LaTeX y Word desde PowerShell.
 
@@ -17,7 +17,7 @@
     deps      Comprueba que estén instaladas las dependencias
 
 .PARAMETER File
-    Nombre del archivo sin extensión. Por defecto: "ejemplo"
+    Nombre del archivo sin extensión. Por defecto: "ejemplos/ejemplo"
 
 .PARAMETER Pages
     Solo para frompdf. Rango de páginas: "1-5" o "1,3,8-10"
@@ -34,7 +34,7 @@ param(
     [ValidateSet("gui", "pdf", "word", "frompdf", "fromword", "all", "clean", "deps")]
     [string]$Action = "gui",
 
-    [string]$File = "ejemplo",
+    [string]$File = "ejemplos/ejemplo",
     [string]$Pages = ""
 )
 

@@ -33,7 +33,7 @@ documentos/
 *.ind
 
 # Resultados de convertir los ejemplos (se numeran: ejemplo_1.tex, ejemplo_1_imagenes/)
-/ejemplo_*
+/ejemplos/ejemplo_*
 *_imagenes/
 
 # Papers de arXiv de la medición (son de sus autores, no se suben)

@@ -14,7 +14,7 @@ if not shutil.which("pandoc"):
 
 from converters import convert  # noqa: E402
 
-EJEMPLO = Path(__file__).resolve().parent.parent / "ejemplo.pdf"
+EJEMPLO = Path(__file__).resolve().parent.parent / "ejemplos" / "ejemplo.pdf"
 
 
 def test_pdf_a_latex(tmp_path):

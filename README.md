@@ -147,7 +147,7 @@ python -m pytest tests -q
 ```
 
 The text and formula cleanup tests only need Python. The end-to-end test
-(`ejemplo.pdf` → LaTeX) is skipped automatically when pymupdf4llm and pandoc
+(`ejemplos/ejemplo.pdf` → LaTeX) is skipped automatically when pymupdf4llm and pandoc
 aren't installed.
 
 ## Project layout
@@ -157,6 +157,7 @@ app.py, cli.py      desktop app and command line
 ui/                 PyQt5 interface: editor, PDF viewer, panels, converter
 converters/         the conversions, plus the formula reconstruction (pdfmath, mathfix, mathocr)
 tests/              pytest
+ejemplos/           sample .tex, .pdf and .docx to try the converter
 bench/              formula recovery benchmark on arXiv papers
 installer/          Windows installer (PyInstaller + Inno Setup)
 ```

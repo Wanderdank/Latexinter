@@ -260,6 +260,7 @@ converters/
     latex_to_docx.py    LaTeX → Word
     docx_to_latex.py    Word  → LaTeX
 tests/                  pruebas (pytest)
+ejemplos/               .tex, .pdf y .docx para probar el conversor
 bench/                  medición de las fórmulas con papers de arXiv
 installer/              instalador de Windows (PyInstaller + Inno Setup)
 assets/                 ícono
@@ -301,7 +302,7 @@ python -m pytest tests -q
 ```
 
 Las pruebas de la limpieza del texto y de las fórmulas solo necesitan Python.
-La de conversión completa (`ejemplo.pdf` → LaTeX) se salta sola si no están
+La de conversión completa (`ejemplos/ejemplo.pdf` → LaTeX) se salta sola si no están
 instalados pymupdf4llm y pandoc.
 
 ## Licencia
