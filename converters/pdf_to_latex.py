@@ -289,6 +289,180 @@ def clean_markdown(md: str) -> str:
     return md.strip() + "\n"
 
 
+# ────────────────────────────────────────────────────────────
+# Listados de código
+# ────────────────────────────────────────────────────────────
+
+_MONO_FONT = re.compile(r"Mono|Courier|Consol|Menlo|Code|CMTT|SFTT|LMTT|t1xtt|TT\d", re.IGNORECASE)
+_LINE_NUMBER = re.compile(r"^\s*(\d{1,4})(?:\s|$)")
+# Junto con el código, el extractor deja marcas de Markdown y los números de
+# línea; entre carácter y carácter del código se admite ese ruido.
+_CODE_NOISE = r"[\s`*_\\\d]{0,12}?"
+
+
+def _is_mono(span: dict) -> bool:
+    return bool(span.get("flags", 0) & 8) or bool(_MONO_FONT.search(span.get("font", "")))
+
+
+def _char_center(char: dict) -> float:
+    return (char["bbox"][0] + char["bbox"][2]) / 2
+
+
+def _code_line(spans: list[dict], first: float, pitch: float) -> str:
+    """
+    El renglón con su sangría y sus espacios. En letra monoespaciada cada
+    carácter ocupa una columna fija, así que el centro del primero de cada
+    trozo dice en qué columna empieza; los demás van seguidos.
+    """
+    line = ""
+    for span in sorted(spans, key=lambda s: s["bbox"][0]):
+        # Los espacios de los bordes los pone a veces el extractor, al ver un
+        # hueco entre dos trozos: la posición ya dice dónde va cada uno.
+        chars = list(span["chars"])
+        while chars and chars[0]["c"].isspace():
+            chars.pop(0)
+        while chars and chars[-1]["c"].isspace():
+            chars.pop()
+        if not chars:
+            continue
+        if line:
+            # Respecto al trozo anterior: medir siempre desde el margen
+            # acumula el error de redondeo y descuadra los espacios.
+            hueco = round((_char_center(chars[0]) - last_center) / pitch)
+            column = max(len(line), last_column + hueco)
+        else:
+            column = max(0, round((_char_center(chars[0]) - first) / pitch))
+        line = line.ljust(column) + "".join(char["c"] for char in chars)
+        last_center = _char_center(chars[-1])
+        last_column = len(line) - 1
+    return line.rstrip()
+
+
+def _strip_line_numbers(lines: list[str]) -> list[str]:
+    """Quita los números de línea si todos los renglones con texto los llevan."""
+    numbered = [_LINE_NUMBER.match(line) for line in lines if line.strip()]
+    if not numbered or not all(numbered):
+        return lines
+    numbers = [int(m.group(1)) for m in numbered]
+    if numbers != sorted(numbers):
+        return lines
+    cut = min(m.end() for m in numbered)
+    return [line[cut:] if line.strip() else line for line in lines]
+
+
+def collect_code_blocks(page) -> list[tuple[str, str]]:
+    """
+    Listados de código de la página: (código con su sangría, patrón que lo
+    localiza en el Markdown).
+
+    El extractor junta todos los renglones de un listado en un solo párrafo,
+    con los números de línea en medio. Aquí se rehace a partir de los trozos
+    en letra monoespaciada: cada altura es un renglón y la posición
+    horizontal dice la sangría.
+    """
+    spans = []
+    for block in page.get_text("rawdict").get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                span["text"] = "".join(char["c"] for char in span.get("chars", []))
+                if span["text"].strip() and _is_mono(span):
+                    spans.append(span)
+    if len(spans) < 3:
+        return []
+
+    # Renglones: los trozos a la misma altura de línea base.
+    rows: list[list[dict]] = []
+    for span in sorted(spans, key=lambda s: (round(s["origin"][1], 1), s["bbox"][0])):
+        if rows and abs(rows[-1][0]["origin"][1] - span["origin"][1]) < 0.4 * span["size"]:
+            rows[-1].append(span)
+        else:
+            rows.append([span])
+
+    # Bloques: renglones seguidos, con como mucho un par de líneas en blanco.
+    blocks: list[list[list[dict]]] = []
+    for row in rows:
+        if blocks:
+            previous = blocks[-1][-1]
+            gap = row[0]["origin"][1] - previous[0]["origin"][1]
+            if 0 < gap < 3.2 * row[0]["size"]:
+                blocks[-1].append(row)
+                continue
+        blocks.append([row])
+
+    found: list[tuple[str, str]] = []
+    for block in blocks:
+        if len(block) < 3:
+            continue        # código en línea, no un listado
+        block_spans = [s for row in block for s in row]
+        # El paso de la rejilla: la distancia entre dos letras seguidas.
+        pitches = sorted(
+            _char_center(b) - _char_center(a)
+            for s in block_spans
+            for a, b in zip(s["chars"], s["chars"][1:])
+            if _char_center(b) > _char_center(a)
+        )
+        if not pitches:
+            continue
+        pitch = pitches[len(pitches) // 2]
+        first = min(
+            _char_center(c) for s in block_spans for c in s["chars"] if not c["c"].isspace()
+        )
+        step = min(
+            (b[0]["origin"][1] - a[0]["origin"][1] for a, b in zip(block, block[1:])),
+            default=1.0,
+        ) or 1.0
+
+        lines: list[str] = []
+        for i, row in enumerate(block):
+            if i:
+                gap = row[0]["origin"][1] - block[i - 1][0]["origin"][1]
+                lines.extend([""] * (round(gap / step) - 1))
+            lines.append(_code_line(row, first, pitch))
+        lines = _strip_line_numbers(lines)
+        code = "\n".join(lines).replace("␣", " ")
+
+        raw = "".join(s["text"] for s in block_spans if s["text"].strip())
+        chars = [c for c in raw if not c.isspace()]
+        if len(chars) < 8:
+            continue
+        pattern = (
+            r"(?:\d+[ \t]+)?[`*_]*"
+            + _CODE_NOISE.join(re.escape(c) for c in chars)
+            + r"[`*_]*"
+        )
+        found.append((code, pattern))
+    return found
+
+
+def restore_code_blocks(text: str, page, vault: list[str]) -> str:
+    """
+    Cambia cada listado aplastado del Markdown por un marcador; el listado ya
+    rehecho se guarda aparte y vuelve como bloque de código al final, cuando
+    ya no lo puede estropear la limpieza ni la reconstrucción de fórmulas.
+    """
+    for code, pattern in collect_code_blocks(page):
+        try:
+            match = re.search(pattern, text)
+        except re.error:
+            continue
+        if not match:
+            continue
+        vault.append(code)
+        marker = f"\n\nLATEXINTERCODIGO{len(vault) - 1}FIN\n\n"
+        text = text[:match.start()] + marker + text[match.end():]
+    return text
+
+
+def _put_back_code(md: str, vault: list[str]) -> str:
+    return re.sub(
+        r"LATEXINTERCODIGO(\d+)FIN",
+        lambda m: "```\n" + vault[int(m.group(1))] + "\n```",
+        md,
+    )
+
+
 _IMAGE_LINK = re.compile(r"!\[([^\]]*)\]\(([^)\n]+)\)")
 
 
@@ -604,6 +778,7 @@ def pdf_to_latex(
     replaced_equations = 0
     ocr_count = 0
     ocr_cache: dict = {}      # una fórmula puede pedirse dos veces por página
+    code_vault: list[str] = []
 
     # El OCR solo entra en juego si se pidió y hay un modelo instalado.
     ocr = None
@@ -676,6 +851,10 @@ def pdf_to_latex(
             if page_index is not None:
                 text = fix_heading_order(text, raw_page_lines(doc[page_index]))
             text = fix_latex_logo(text)
+            # Los listados de código, antes de que la reconstrucción de
+            # fórmulas confunda «a, b = 0, 1» con matemáticas.
+            if page_index is not None:
+                text = restore_code_blocks(text, doc[page_index], code_vault)
 
             if page_index is not None and math_reconstruction:
                 page = doc[page_index]
@@ -755,6 +934,7 @@ def pdf_to_latex(
                 images_dir.rmdir()
 
     log("Traduciendo símbolos a LaTeX matemático…")
+    md = _put_back_code(md, code_vault)
     md = mathfix.latexify_markdown(md)
 
     # El .md tiene que estar junto al .tex para que las rutas relativas de las

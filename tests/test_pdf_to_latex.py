@@ -98,3 +98,27 @@ def test_imagenes_relativas_al_tex_y_no_a_la_carpeta_actual(tmp_path, monkeypatc
     md, total = p._relocate_images("![](out/doc_imagenes/a.png)", tmp_path / "out")
     assert md == "![](doc_imagenes/a.png)"
     assert total == 1
+
+
+# ── Listados de código ──────────────────────────────────────
+
+def _trozo(texto, x, paso=6.0):
+    chars = [{"c": c, "bbox": (x + i * paso, 0, x + (i + 1) * paso, 10)} for i, c in enumerate(texto)]
+    return {"chars": chars, "bbox": (x, 0, x + len(texto) * paso, 10)}
+
+
+def test_renglon_de_codigo_con_sangria_y_espacios():
+    # «return n» sangrado 8 columnas; el extractor partió el renglón en dos
+    # trozos y puso un espacio de más al principio del segundo.
+    renglon = [_trozo("return", 48.0), _trozo(" n", 84.0)]
+    assert p._code_line(renglon, first=3.0, pitch=6.0) == "        return n"
+
+
+def test_quita_los_numeros_de_linea():
+    lineas = ["1 def f():", "2     return 1", "", "3 f()"]
+    assert p._strip_line_numbers(lineas) == ["def f():", "    return 1", "", "f()"]
+
+
+def test_no_quita_numeros_que_son_codigo():
+    lineas = ["10 PRINT X", "x = 1"]
+    assert p._strip_line_numbers(lineas) == lineas
