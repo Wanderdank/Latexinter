@@ -92,3 +92,32 @@ def test_operador_de_la_fuente_de_extension_no_es_un_indice():
         span("x", 279, 231, 285, 242, 239, size=12.0),
     ]
     assert pdfmath._reconstruct_line(spans) == r"f=\sum x"
+
+
+def test_matriz_con_corchetes_por_piezas():
+    # Corchetes grandes compuestos con piezas (codificación Symbol de Adobe).
+    items = [
+        span("", 78, 500, 84, 510, 500, font="CMEX10"),
+        span("", 78, 512, 84, 524, 512, font="CMEX10"),
+        span("a", 90, 500, 95, 510, 508),
+        span("b", 110, 500, 115, 510, 508),
+        span("c", 90, 512, 95, 522, 520),
+        span("d", 110, 512, 115, 522, 520),
+        span("", 120, 500, 126, 510, 500, font="CMEX10"),
+        span("", 120, 512, 126, 524, 512, font="CMEX10"),
+    ]
+    piezas = pdfmath._matrices(items)
+    assert pdfmath._layout(piezas) == r"\begin{bmatrix} a & b \\ c & d \end{bmatrix}"
+
+
+def test_casos_con_llave():
+    items = [
+        span("", 60, 498, 66, 508, 498, font="CMEX10"),
+        span("", 60, 512, 66, 524, 512, font="CMEX10"),
+        span("0,", 70, 500, 78, 510, 508, font="CMR10"),
+        span("x>0", 100, 500, 115, 510, 508),
+        span("1,", 70, 512, 78, 522, 520, font="CMR10"),
+        span("x≤0", 100, 512, 115, 522, 520),
+    ]
+    piezas = pdfmath._matrices(items)
+    assert pdfmath._layout(piezas) == r"\begin{cases} 0, & x>0 \\ 1, & x\leq 0 \end{cases}"

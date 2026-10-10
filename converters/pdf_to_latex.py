@@ -557,6 +557,11 @@ def _ocr_display(page, equations, ocr, log, cache: dict) -> tuple[list, int]:
     return resultado, cuantas
 
 
+_OCR_EQUATION_NUMBER = re.compile(
+    r"^\(\d+(?:\.\d+)?[a-z]?\)(?:\s*\\q?quad)*|(?:\\q?quad\s*)*\(\d+(?:\.\d+)?[a-z]?\)$"
+)
+
+
 def _best_reading(page, rect, geometria: Optional[str], ocr, log, cache: dict) -> Optional[str]:
     """
     La lectura del OCR si sus glifos son los del PDF; si no, la de la
@@ -565,6 +570,10 @@ def _best_reading(page, rect, geometria: Optional[str], ocr, log, cache: dict) -
     """
     if ocr is None:
         return geometria
+    if not geometria and page.get_text("text", clip=rect).strip():
+        # Hay texto pero no fórmula (un número de ecuación suelto): nada que
+        # leer, y nada con que comprobar al OCR.
+        return None
     # El modelo no necesita escribir mucho más que la geometría: si se
     # alarga, se ha ido por las ramas y se le corta (además, es lo que más
     # tarda). Solo se prueba otra resolución si la primera no cuadra.
@@ -574,6 +583,8 @@ def _best_reading(page, rect, geometria: Optional[str], ocr, log, cache: dict) -
         latex = _read(page, rect, dpi, ocr, cache, tope)
         if not latex:
             continue
+        # El modelo copia también el número de la ecuación: «(5.5)\qquad …».
+        latex = _OCR_EQUATION_NUMBER.sub("", latex).strip()
         if not geometria:
             return latex
         puntos = pdfmath.agreement(latex, geometria)

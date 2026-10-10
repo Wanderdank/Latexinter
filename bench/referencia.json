@@ -2,8 +2,8 @@
   "sin_ocr": {
     "total": {
       "formulas": 3083,
-      "exactas": 21.25,
-      "parecido": 54.05,
+      "exactas": 21.34,
+      "parecido": 54.13,
       "errores_latex": 0,
       "papers_sin_errores": 11
     },
@@ -14,38 +14,38 @@
     },
     "no trivial": {
       "formulas": 1929,
-      "exactas": 7.72,
-      "parecido": 50.18
+      "exactas": 7.88,
+      "parecido": 50.3
     },
     "índices": {
       "formulas": 1718,
-      "exactas": 19.21,
-      "parecido": 59.05
+      "exactas": 19.27,
+      "parecido": 59.1
     },
     "destacada": {
       "formulas": 535,
-      "exactas": 10.28,
-      "parecido": 62.39
+      "exactas": 10.84,
+      "parecido": 62.84
     },
     "fracciones": {
       "formulas": 273,
       "exactas": 3.66,
-      "parecido": 60.15
+      "parecido": 59.34
     },
     "sumas e integrales": {
       "formulas": 182,
       "exactas": 2.2,
-      "parecido": 49.12
+      "parecido": 47.92
     },
     "raíces": {
       "formulas": 39,
       "exactas": 2.56,
-      "parecido": 48.24
+      "parecido": 48.22
     },
     "matrices": {
       "formulas": 24,
-      "exactas": 0.0,
-      "parecido": 38.86
+      "exactas": 12.5,
+      "parecido": 62.79
     }
   },
   "ocr": {

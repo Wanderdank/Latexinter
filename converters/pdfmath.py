@@ -1024,6 +1024,151 @@ def _span_x(items: list[dict]) -> tuple[float, float]:
     return min(s["bbox"][0] for s in items), max(s["bbox"][2] for s in items)
 
 
+# ────────────────────────────────────────────────────────────
+# Matrices y casos: delimitadores altos
+# ────────────────────────────────────────────────────────────
+
+# Las piezas con que se componen los paréntesis, corchetes y llaves grandes.
+# Llegan con los códigos de uso privado de la codificación Symbol de Adobe
+# (U+F8E5…U+F8FE) o en las posiciones 0x30-0x43 de la fuente de extensión.
+_PIECES: dict[str, str] = {}
+for _kind, _codes in {
+    "(": "\x30\x40\x42", ")": "\x31\x41\x43",
+    "[": "\x32\x34\x36", "]": "\x33\x35\x37",
+    # El tramo recto de las llaves (U+F8F4, 0x3E) es el mismo para las dos;
+    # se cuenta como de la izquierda, que es la de los casos.
+    "\\{": "\x38\x3a\x3c\x3e", "\\}": "\x39\x3b\x3d",
+}.items():
+    for _code in _codes:
+        _PIECES[_code] = _kind
+
+_MATRIX_ENV = {"(": "pmatrix", "[": "bmatrix", "\\{": "Bmatrix", "|": "vmatrix"}
+_CLOSING = {"(": ")", "[": "]", "\\{": "\\}", "|": "|"}
+
+
+def _delimiter_kind(span: dict) -> Optional[str]:
+    """Qué delimitador es un glifo de la fuente de extensión, o None."""
+    if not EXTENSION_FONT_RE.search(span.get("font", "")) or "latex" in span:
+        return None
+    text = span["text"].strip()
+    if text and all(c in _PIECES for c in text):
+        kinds = {_PIECES[c] for c in text}
+        return kinds.pop() if len(kinds) == 1 else None
+    latex = BIG_DELIMITERS.get(text) if len(text) == 1 else None
+    return latex if latex in _MATRIX_ENV or latex in _CLOSING.values() else None
+
+
+def _delimiter_box(span: dict) -> tuple:
+    """
+    La caja de verdad de un delimitador. Las piezas traen una aceptable; los
+    de tamaño fijo cuelgan de su origen y miden, según la posición que
+    ocupan en la fuente, 1,2, 1,8, 2,4 o 3 veces el cuerpo.
+    """
+    text = span["text"].strip()
+    x0, _, x1, _ = span["bbox"]
+    if len(text) != 1 or text in _PIECES:
+        return tuple(span["bbox"])
+    code = ord(text)
+    if code < 0x10:
+        alto = 1.2
+    elif code < 0x12 or 0x44 <= code <= 0x45 or 0x68 <= code <= 0x6F:
+        alto = 1.8
+    elif code < 0x20:
+        alto = 2.4
+    else:
+        alto = 3.0
+    arriba = min(span["origin"][1], span["bbox"][1])
+    return (x0, arriba, x1, arriba + alto * span["size"])
+
+
+def _tall_delimiters(items: list[dict]) -> list[tuple[str, tuple, list[dict]]]:
+    """
+    Delimitadores que abarcan varios renglones: (tipo, caja, piezas). Las
+    piezas de uno grande van en la misma columna, una encima de otra.
+    """
+    size, _ = _line_baseline(items)
+    candidatos = sorted(
+        ((k, it) for it in items if (k := _delimiter_kind(it))),
+        key=lambda par: (round(par[1]["bbox"][0]), par[1]["bbox"][1]),
+    )
+    altos: list[tuple[str, tuple, list[dict]]] = []
+    for kind, it in candidatos:
+        caja = _delimiter_box(it)
+        if altos:
+            k, c, piezas = altos[-1]
+            if k == kind and abs(c[0] - caja[0]) < 3 and caja[1] - c[3] < 1.2 * size:
+                altos[-1] = (k, _union([c, caja]), piezas + [it])
+                continue
+        altos.append((kind, caja, [it]))
+    return [a for a in altos if a[1][3] - a[1][1] >= 1.8 * size]
+
+
+def _cells(row: list[dict], gap: float) -> list[str]:
+    """Las celdas de un renglón de una matriz: lo separado por huecos anchos."""
+    return [_layout(tramo) for tramo in _chains(row, gap)]
+
+
+def _matrices(items: list[dict], sin_rayas: bool = False) -> list[dict]:
+    """
+    Matrices (un delimitador alto a cada lado) y casos (una llave alta sola a
+    la izquierda): se arman como pmatrix/bmatrix o cases, celda a celda.
+    """
+    altos = _tall_delimiters(items)
+    if not altos:
+        return items
+    size, _ = _line_baseline(items)
+    usados: set[int] = set()
+    nuevas: list[dict] = []
+    for i, (kind, caja, piezas) in enumerate(altos):
+        if any(id(p) in usados for p in piezas) or kind in (")", "]", "\\}"):
+            continue
+        cierre = None
+        for kind2, caja2, piezas2 in altos[i + 1:]:
+            solape = min(caja[3], caja2[3]) - max(caja[1], caja2[1])
+            if (kind2 == _CLOSING.get(kind) and caja2[0] > caja[2]
+                    and solape > 0.7 * (caja[3] - caja[1])):
+                cierre = (caja2, piezas2)
+                break
+        derecha = cierre[0][0] if cierre else float("inf")
+        dentro = [
+            it for it in items
+            if id(it) not in usados and it not in piezas
+            and caja[2] - 1 <= _center(it["bbox"])[0] < derecha
+            and caja[1] - 0.6 * size <= _center(it["bbox"])[1] <= caja[3] + 0.6 * size
+        ]
+        filas = _rows(dentro)
+        if len(filas) < 2:
+            continue
+        # Sin rayas en el PDF, un paréntesis alto alrededor de una fracción
+        # (numerador y denominador aún sueltos) parece una matriz de dos
+        # renglones: se pide más para creérselo.
+        if sin_rayas and cierre and len(filas) == 2 and not all(
+            len(_chains(f, 0.9 * size)) > 1 for f in filas
+        ):
+            continue
+        if cierre:
+            cuerpo = " \\\\ ".join(" & ".join(_cells(f, 0.9 * size)) for f in filas)
+            latex = "\\begin{" + _MATRIX_ENV[kind] + "} " + cuerpo + " \\end{" + _MATRIX_ENV[kind] + "}"
+            partes = piezas + cierre[1] + dentro
+        elif kind == "\\{":
+            renglones = []
+            for fila in filas:
+                tramos = _chains(fila, 0.9 * size)
+                if len(tramos) > 1:
+                    renglones.append(_layout(tramos[0]) + " & " + _layout([s for t in tramos[1:] for s in t]))
+                else:
+                    renglones.append(_layout(fila))
+            latex = "\\begin{cases} " + " \\\\ ".join(renglones) + " \\end{cases}"
+            partes = piezas + dentro
+        else:
+            continue
+        usados.update(id(p) for p in partes)
+        nuevas.append(_piece(latex, partes, (caja[1] + caja[3]) / 2, size))
+    if not nuevas:
+        return items
+    return [it for it in items if id(it) not in usados] + nuevas
+
+
 def _is_radical(span: dict) -> bool:
     """El signo √, sea el carácter Unicode o el de la fuente de extensión."""
     text = span["text"].strip()
@@ -1261,6 +1406,9 @@ def reconstruct_region(page, rect: tuple) -> Optional[str]:
     bars = [b for b in _fraction_bars(page) if _dentro(b, rect, 2.0)]
     items = _attach_accents(items)
     items = _stack_fractions(items, bars)
+    # Las matrices antes que las fracciones sin raya: sus renglones, uno
+    # encima de otro, se confundirían con numeradores y denominadores.
+    items = _matrices(items, sin_rayas=not bars)
     if not bars:
         items = _virtual_fractions(items)
     # Después de las fracciones: así sus numeradores ya no despistan al buscar
@@ -1290,6 +1438,8 @@ _STRUCTURE = {
     "\\qquad", "\\displaystyle", "\\textstyle", "\\limits", "\\nolimits", "\\underset",
     "\\overset", "\\mathop", "\\hat", "\\bar", "\\tilde", "\\vec", "\\dot", "\\ddot",
     "\\widehat", "\\widetilde", "\\overline", "\\underline", "\\sqrt", "\\surd", "\\ ",
+    "\\bigm", "\\Bigm", "\\biggm", "\\Biggm", "\\biggl", "\\biggr", "\\Biggl", "\\Biggr",
+    "\\middle", "\\substack", "\\boldsymbol", "\\mathscr", "\\textstyle", "\\scriptstyle",
 }
 _ENVIRONMENTS = re.compile(r"\\(begin|end)\{[^{}]*\}")
 _ATOM_SYNONYMS = {
@@ -1306,6 +1456,9 @@ def latex_atoms(latex: str) -> list[str]:
     estructura (llaves, \\frac, \\left…). \\lim cuenta como l, i, m, que es
     lo que hay en el PDF.
     """
+    # Los glifos del PDF pueden venir aún sin traducir (letras matemáticas
+    # recortadas, símbolos Unicode): se traducen igual que en el documento.
+    latex = mathfix._translate_inside_math(mathfix.repair_truncated_alphanumerics(latex))
     atoms: list[str] = []
     for token in _ATOM.findall(_ENVIRONMENTS.sub(" ", latex)):
         token = _ATOM_SYNONYMS.get(token, token)
