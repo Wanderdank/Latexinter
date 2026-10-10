@@ -14,11 +14,12 @@ Pillow>=10.0         # recorte de las fórmulas para el OCR
 PyMuPDF>=1.24,<1.28       # lectura del PDF y vista previa
 pymupdf4llm>=0.0.17,<1.28 # extracción de PDF a Markdown
 
-# ── Opcional: OCR de fórmulas ──────────────────────────────────────────
-# Sin esto se recuperan los índices, los símbolos y los operadores leyendo la
-# maquetación del PDF, pero no las fórmulas apiladas (fracciones, matrices).
-# Instálalo aparte, porque se trae PyTorch y ocupa alrededor de 1,5 GB:
+onnxruntime>=1.17        # OCR de fórmulas (Pix2Text-MFR, sin PyTorch)
+numpy
+
+# ── Opcional: otros motores de OCR ─────────────────────────────────────
+# El OCR de serie es Pix2Text-MFR: corre con onnxruntime y la primera vez
+# descarga su modelo (120 MB). Si se prefiere pix2tex o Texify, hay que
+# instalarlos aparte; se traen PyTorch y ocupan alrededor de 1,5 GB:
 #
 #   pip install pix2tex
-#
-# La primera vez que se usa descarga el modelo (unos 115 MB).

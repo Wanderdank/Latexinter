@@ -27,6 +27,7 @@ from converters import (  # noqa: E402
     dependency_report,
     human_size,
 )
+from converters import mathocr  # noqa: E402
 from converters.common import refresh_path  # noqa: E402
 
 # La consola de Windows no siempre habla UTF-8.
@@ -79,13 +80,14 @@ def build_parser() -> argparse.ArgumentParser:
     pdf2tex.add_argument(
         "--ocr",
         action="store_true",
-        help="Reconocer las fórmulas con un modelo de OCR (recupera fracciones "
-             "y matrices, pero necesita el modelo instalado y va más lento)",
+        help="Leer también las ecuaciones con un modelo de OCR y quedarse con "
+             "su lectura cuando cuadra con los glifos del PDF (más lento; la "
+             "primera vez descarga el modelo, 120 MB)",
     )
     pdf2tex.add_argument(
         "--ocr-motor",
-        choices=["pix2tex", "texify"],
-        help="Qué modelo de OCR usar (por defecto, el que esté instalado)",
+        choices=[backend.key for backend in mathocr.BACKENDS],
+        help="Qué modelo de OCR usar (por defecto, Pix2Text-MFR)",
     )
     pdf2tex.add_argument(
         "--keep-md", action="store_true", help="Conservar el Markdown intermedio"
@@ -177,8 +179,6 @@ def check_dependencies() -> int:
     ):
         ruta = find_tool(herramienta)
         print(f"  {'✓' if ruta else '·'}  {descripcion}{'' if ruta else '   [opcional]'}")
-
-    from converters import mathocr
 
     for backend in mathocr.BACKENDS:
         marca = "✓" if backend.installed else "·"

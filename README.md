@@ -59,28 +59,32 @@ and the fonts to work out what was lost:
   nest them by size, so `e⁻ˣ²` becomes `e^{-x^{2}}`.
 - **Big operators:** TeX's math fonts store the integral sign in the slot of
   `Z` and the summation sign in the slot of `X`. Latexinter translates them back.
-- **Display equations** are recognized because they're centered and set almost
-  entirely in math fonts. Latexinter reads the whole equation at once: it finds
-  the fraction bars among the page's drawings and stacks what's above and below
-  into `\frac{…}{…}`, hangs limits on `∑` and `lim`, and puts accents like `ˆ`
-  back on their letter.
+- **Display equations:** pymupdf4llm's layout model marks where each one is,
+  the same "find the region, then read it" approach as MinerU or PP-Structure.
+  Latexinter reads each region as a whole. It finds the fraction bars among the
+  page's drawings and stacks what's above and below into `\frac{…}{…}`. When a
+  PDF has no bars (Ghostscript output, for instance), it infers the fraction
+  from what sits above and below the line, the way layout-based recognizers
+  like Infty and MaxTract do. It also hangs limits on `∑` and `lim`
+  (`\substack` when there are two rows), rebuilds roots from the `√` and its
+  bar, and puts accents like `ˆ` back on their letter.
 - **Font alphabets:** a letter in a blackboard font becomes `\mathbb{E}`, one in
   a calligraphic font `\mathcal{S}`. Computer Modern, STIX and newtx fonts are
   recognized.
 - **Unicode symbols** ([`mathfix.py`](converters/mathfix.py)): instead of
   `if $\alpha$ $\leq$ $\beta$`, it detects the whole math run and writes
   `if $\alpha \leq \beta$`.
-- **Stacked formulas (OCR):** fractions leave no trace in a PDF's text, so
-  `(-b ± √(b²-4ac)) / 2a` comes out as `−b±√b2−4ac2a`. Latexinter finds the
-  fraction bars, crops the formula and runs it through
-  [pix2tex](https://github.com/lukas-blecher/LaTeX-OCR). It reads at several
-  resolutions and keeps the reading that repeats. It only uses OCR where
-  there's a fraction, because on single-line math the layout reconstruction is
-  more reliable.
+- **OCR (optional):** with `--ocr`, each equation is also read as an image by
+  [Pix2Text-MFR](https://huggingface.co/breezedeus/pix2text-mfr-1.5) (MIT).
+  It runs on onnxruntime, which Latexinter already ships, so it needs no
+  PyTorch; the 120 MB model downloads on first use. Its reading is only kept
+  when it uses the same glyphs the PDF has: the layout reconstruction knows the
+  exact characters, the OCR is better at arranging them but sometimes makes
+  one up. pix2tex and Texify still work if they're installed.
 
-With OCR, the quadratic formula above comes back as
-`\frac{-b\pm\sqrt{b^{2}-4ac}}{2a}`, and a Taylor series as
-`f(x)=\sum_{n=0}^{\infty}\frac{f^{(n)}(a)}{n!}(x-a)^{n}`.
+The sample's equations come back as
+`\int_{-\infty}^{\infty}e^{-x^{2}}dx=\sqrt{\pi}` and
+`f(x)=\sum_{n=0}^{\infty}\frac{f^{(n)}(a)}{n!}(x-a)^{n}`, without OCR.
 
 It also cleans up the usual PDF debris:
 - Running headers and stray page numbers.
@@ -113,7 +117,8 @@ python cli.py deps        # checks that everything is in place
 python app.py
 ```
 
-For formula OCR, install `pip install pix2tex` as well. It's about 1.5 GB because it pulls in PyTorch.
+Formula OCR (`--ocr`) works out of the box: the first time, it downloads the
+Pix2Text-MFR model (120 MB) into `%LOCALAPPDATA%\Latexinter\modelos`.
 
 ## Command line
 
@@ -128,7 +133,7 @@ python cli.py docx2tex report.docx
 
 ```bash
 python -m bench.run          # without OCR
-python -m bench.run --ocr    # with pix2tex
+python -m bench.run --ocr    # with formula OCR
 ```
 
 This downloads the arXiv papers listed in `bench/papers.txt` (the PDF and the
@@ -182,7 +187,7 @@ installer/          Windows installer (PyInstaller + Inno Setup)
 Licenses of the dependencies:
 - PyQt5 is GPL v3.
 - PyMuPDF and pymupdf4llm are AGPL v3.
-- pix2tex is MIT.
+- The Pix2Text-MFR model and pix2tex are MIT.
 - Since version 1.27, pymupdf4llm also installs **pymupdf-layout**, which is
   *PolyForm Noncommercial*: free to use, but not for commercial purposes
   without a license from Artifex.

@@ -135,12 +135,16 @@ la tipografía para deducir lo que se perdió:
 - **Operadores grandes** — las fuentes matemáticas de TeX guardan la integral en
   la posición de la `Z` y el sumatorio en la de la `X`. Sin traducir esa
   codificación, una integral se extrae del PDF como la letra Z.
-- **Ecuaciones destacadas** — se reconocen porque van centradas y compuestas
-  casi enteras en fuentes matemáticas. El extractor las trocea o las convierte
-  en imagen, así que Latexinter lee la ecuación entera de una vez: busca las
-  rayas de fracción entre los gráficos de la página y apila lo de encima y lo de
-  debajo en `\frac{…}{…}`, cuelga los límites de `∑` y `lim`, y devuelve los
-  acentos como `ˆ` a su letra.
+- **Ecuaciones destacadas** — el modelo de maquetación de pymupdf4llm marca
+  dónde está cada una; es lo mismo que hacen MinerU o PP-Structure: primero
+  localizar la región de la fórmula y luego leerla. Latexinter lee cada región
+  entera: busca las rayas de fracción entre los gráficos de la página y apila
+  lo de encima y lo de debajo en `\frac{…}{…}`. Si el PDF no guarda las rayas
+  (los que pasan por Ghostscript, por ejemplo), deduce la fracción de lo que
+  queda por encima y por debajo del renglón, como hacen los programas de
+  reconocimiento por maquetación (Infty, MaxTract). También cuelga los límites
+  de `∑` y `lim` (con `\substack` si son dos renglones), rehace las raíces con
+  el `√` y su raya, y devuelve los acentos como `ˆ` a su letra.
 - **Alfabetos de las fuentes** — una letra en fuente de pizarra se convierte en
   `\mathbb{E}`, y una caligráfica en `\mathcal{S}`. Se reconocen las fuentes de
   Computer Modern, STIX y newtx.
@@ -160,44 +164,31 @@ errores. Los caracteres que el PDF
 no asocia a ningún Unicode no se pueden recuperar: se quedan en el código y se
 imprimen como `□`, para que sea fácil encontrarlos y corregirlos.
 
-### Fórmulas apiladas: el OCR
+### El OCR, opcional
 
-Lo anterior recupera muy bien lo que va en una sola línea, pero no puede con lo
-que está *apilado*. Una fracción no deja rastro en el texto del PDF: el
-numerador y el denominador salen pegados y la raya no sale en absoluto, así que
-`(-b ± √(b²-4ac)) / 2a` se extrae como `−b±√b2−4ac2a`.
+Con lo anterior, las tres ecuaciones del ejemplo salen bien sin OCR:
+`\int_{-\infty}^{\infty}e^{-x^{2}}dx=\sqrt{\pi}`,
+`f(x)=\sum_{n=0}^{\infty}\frac{f^{(n)}(a)}{n!}(x-a)^{n}` y el sistema de dos
+ecuaciones.
 
-Para eso hay que mirar la fórmula como imagen. Latexinter localiza las rayas de
-fracción entre los gráficos de la página, recorta la fórmula entera y se la pasa
-a un modelo de reconocimiento:
-
-```bash
-pip install pix2tex
-```
-
-Son unos 1,5 GB porque arrastra PyTorch, y la primera vez descarga el modelo
-(115 MB). Después, marca **Reconocer las fórmulas con OCR** en el conversor, o
-usa `--ocr` desde la línea de comandos:
+Además se puede leer cada ecuación como imagen con
+[Pix2Text-MFR](https://huggingface.co/breezedeus/pix2text-mfr-1.5) (licencia
+MIT). Funciona con onnxruntime, que Latexinter ya trae, así que no hace falta
+PyTorch; la primera vez descarga el modelo (120 MB) en
+`%LOCALAPPDATA%\Latexinter\modelos`. Marca **Reconocer las fórmulas con OCR**
+en el conversor, o usa `--ocr`:
 
 ```bash
 python cli.py pdf2tex articulo.pdf --ocr
 ```
 
-Con eso, el ejemplo de arriba sale como `\frac{-b\pm\sqrt{b^{2}-4ac}}{2a}`, y una
-serie de Taylor centrada como
-`f(x)=\sum_{n=0}^{\infty}\frac{f^{(n)}(a)}{n!}(x-a)^{n}`.
-
-**Cada método donde gana.** El OCR *no* se usa en todo: en una ecuación de una
-sola línea la reconstrucción por maquetación es más de fiar, porque lee los
-caracteres que hay en el PDF en vez de adivinarlos —en las pruebas el modelo
-leyó `9x+2y=7` donde ponía `3x`. Así que el OCR entra solo donde hay una
-fracción, que es donde la geometría no llega. Y si el modelo no saca en claro la
-ecuación entera, se combinan los dos: la geometría pone las partes de una línea
-y el OCR, solo la fracción.
-
-También se lee a varias resoluciones y se compara: el modelo se entrenó con
-fórmulas de cierto tamaño y a 400 dpi empezaba a inventar, así que se prueba a
-200, 150 y 260 dpi y se elige la lectura que se repite.
+**Cada método donde gana.** La reconstrucción por maquetación lee los
+caracteres exactos del PDF, aunque a veces no sepa colocarlos; el modelo los
+coloca bien, pero de vez en cuando se inventa alguno (en las pruebas leyó
+`9x+2y=7` donde ponía `3x`). Así que se hacen las dos lecturas y se comparan
+sus glifos: la del OCR solo se queda si usa los mismos caracteres que hay en el
+PDF. pix2tex y Texify siguen funcionando si están instalados
+(`pip install pix2tex`, unos 1,5 GB con PyTorch).
 
 **En el editor** hay además `Ctrl+Shift+V`: recorta una fórmula de donde sea,
 cópiala, y se inserta ya convertida a LaTeX en el punto donde esté el cursor.
@@ -240,8 +231,8 @@ funcionando si no están:
 - **texcount** — recuento de palabras oficial de TeX. En Windows necesita Perl;
   sin él, Latexinter usa su propio contador, que descarta el preámbulo, los
   comentarios, las fórmulas y el código.
-- **pix2tex** (`pip install pix2tex`) — OCR de fórmulas, para recuperar las
-  fracciones y las matrices de un PDF.
+- **pix2tex** o **Texify** — otros motores de OCR de fórmulas, en lugar de
+  Pix2Text-MFR, que ya viene incluido (`pip install pix2tex`, con PyTorch).
 
 ## Estructura
 
@@ -284,7 +275,7 @@ docs/                   capturas del README
 
 ```bash
 python -m bench.run          # sin OCR
-python -m bench.run --ocr    # con pix2tex
+python -m bench.run --ocr    # con el OCR de fórmulas
 ```
 
 Baja de arXiv los papers de `bench/papers.txt` (PDF y `.tex` original, en
@@ -323,7 +314,7 @@ instalados pymupdf4llm y pandoc.
 Latexinter se distribuye bajo la [GNU AGPL v3](LICENSE).
 
 Licencias de las dependencias, por si vas a redistribuirlo: PyQt5 es GPL v3;
-PyMuPDF y pymupdf4llm son AGPL v3; pix2tex es MIT. Desde la versión 1.27,
+PyMuPDF y pymupdf4llm son AGPL v3; el modelo Pix2Text-MFR y pix2tex son MIT. Desde la versión 1.27,
 pymupdf4llm instala además **pymupdf-layout**, que es *PolyForm
 Noncommercial*: se puede usar gratis, pero no con fines comerciales sin una
 licencia de Artifex.

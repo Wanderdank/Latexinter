@@ -509,11 +509,12 @@ def _ocr_fractions(page, text: str, ocr, log, cache: dict) -> tuple[str, int]:
 
     reconocidas = 0
     for region in regiones:
-        latex = _recognize(page, region.rect, region.exclude, ocr, cache)
+        plano = pdfmath._to_math(region.plain)
+        latex = _read(page, region.rect, 200, ocr, cache, len(plano) * 3 + 30, region.exclude)
         if not latex:
             continue
         # Los glifos tienen que ser los que hay en el PDF.
-        if pdfmath.agreement(latex, pdfmath._to_math(region.plain)) < OCR_MIN_AGREEMENT:
+        if pdfmath.agreement(latex, plano) < OCR_MIN_AGREEMENT:
             continue
         try:
             text, cuantas = re.subn(
@@ -564,9 +565,13 @@ def _best_reading(page, rect, geometria: Optional[str], ocr, log, cache: dict) -
     """
     if ocr is None:
         return geometria
+    # El modelo no necesita escribir mucho más que la geometría: si se
+    # alarga, se ha ido por las ramas y se le corta (además, es lo que más
+    # tarda). Solo se prueba otra resolución si la primera no cuadra.
+    tope = len(geometria) + 40 if geometria else None
     mejor, acuerdo = None, 0.0
-    for dpi in mathocr.DPI_PREFERIDOS:
-        latex = _read(page, rect, dpi, ocr, cache)
+    for dpi in (200, 150):
+        latex = _read(page, rect, dpi, ocr, cache, tope)
         if not latex:
             continue
         if not geometria:
@@ -574,7 +579,7 @@ def _best_reading(page, rect, geometria: Optional[str], ocr, log, cache: dict) -
         puntos = pdfmath.agreement(latex, geometria)
         if puntos > acuerdo:
             mejor, acuerdo = latex, puntos
-        if acuerdo >= 0.95:
+        if acuerdo >= OCR_MIN_AGREEMENT:
             break
     if mejor and acuerdo >= OCR_MIN_AGREEMENT:
         log(f"  ecuación reconocida ({acuerdo:.0%}): {mejor[:70]}")
@@ -620,12 +625,13 @@ def _put_back_formulas(md: str, vault: list[str]) -> str:
     return re.sub(r"XQFORMULAQX(\d+)FIN", lambda m: vault[int(m.group(1))], md)
 
 
-def _read(page, rect, dpi: int, ocr, cache: dict) -> Optional[str]:
+def _read(page, rect, dpi: int, ocr, cache: dict, max_tokens: Optional[int] = None,
+          exclude=()) -> Optional[str]:
     """Una lectura del OCR, guardada por si se vuelve a pedir."""
     clave = (id(page), tuple(round(v, 1) for v in rect), dpi)
     if clave not in cache:
-        imagen = mathocr.render_region(page, rect, dpi=dpi)
-        cache[clave] = ocr.recognize(imagen) if imagen is not None else None
+        imagen = mathocr.render_region(page, rect, dpi=dpi, exclude=exclude)
+        cache[clave] = ocr.recognize(imagen, max_tokens) if imagen is not None else None
     return cache[clave]
 
 
@@ -669,14 +675,6 @@ def _collapse(racimo, page=None) -> "pdfmath.DisplayEquation":
         latex = "\\begin{aligned} " + " \\\\ ".join(lineas) + " \\end{aligned}"
 
     return _replace(miembros[0], latex=latex, rect=racimo.rect)
-
-
-def _recognize(page, rect, exclude, ocr, cache: dict) -> Optional[str]:
-    """OCR de una región, guardando el resultado por si se vuelve a pedir."""
-    clave = (id(page), tuple(round(v, 1) for v in rect))
-    if clave not in cache:
-        cache[clave] = mathocr.recognize_region(ocr, page, rect, exclude=exclude)
-    return cache[clave]
 
 
 # ────────────────────────────────────────────────────────────

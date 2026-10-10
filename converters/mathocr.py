@@ -322,7 +322,7 @@ class MFRModel:
         self.tokens = {i: t for t, i in vocabulario["model"]["vocab"].items()}
         self.bytes = _byte_decoder()
 
-    def __call__(self, imagen) -> str:
+    def __call__(self, imagen, max_tokens: Optional[int] = None) -> str:
         import numpy as np
         from PIL import Image
 
@@ -332,7 +332,7 @@ class MFRModel:
         estado = self.encoder.run(None, {"pixel_values": pixeles})[0]
 
         ids = [_MFR_START]
-        for _ in range(_MFR_MAX_TOKENS):
+        for _ in range(min(max_tokens or _MFR_MAX_TOKENS, _MFR_MAX_TOKENS)):
             logits = self.decoder.run(None, {
                 "input_ids": np.array([ids], dtype=np.int64),
                 "encoder_hidden_states": estado,
@@ -442,15 +442,19 @@ class MathOCREngine:
         return reconocer
 
     # ── Uso ──
-    def recognize(self, imagen) -> Optional[str]:
+    def recognize(self, imagen, max_tokens: Optional[int] = None) -> Optional[str]:
         """
         Devuelve el LaTeX de la fórmula de la imagen, o None si no se pudo
-        reconocer o el resultado no es de fiar.
+        reconocer o el resultado no es de fiar. Con max_tokens se corta al
+        modelo si se alarga más de la cuenta (solo Pix2Text-MFR lo admite).
         """
         if not self.load():
             return None
         try:
-            crudo = self._reconocer(imagen)
+            if max_tokens and isinstance(self._modelo, MFRModel):
+                crudo = self._reconocer(imagen, max_tokens=max_tokens)
+            else:
+                crudo = self._reconocer(imagen)
         except Exception as exc:
             self.log(f"El OCR falló en una fórmula: {exc}")
             return None
