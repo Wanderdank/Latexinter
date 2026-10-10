@@ -137,7 +137,13 @@ la tipografía para deducir lo que se perdió:
   codificación, una integral se extrae del PDF como la letra Z.
 - **Ecuaciones destacadas** — se reconocen porque van centradas y compuestas
   casi enteras en fuentes matemáticas. El extractor las trocea o las convierte
-  en imagen, así que Latexinter las vuelve a juntar y las reconstruye aparte.
+  en imagen, así que Latexinter lee la ecuación entera de una vez: busca las
+  rayas de fracción entre los gráficos de la página y apila lo de encima y lo de
+  debajo en `\frac{…}{…}`, cuelga los límites de `∑` y `lim`, y devuelve los
+  acentos como `ˆ` a su letra.
+- **Alfabetos de las fuentes** — una letra en fuente de pizarra se convierte en
+  `\mathbb{E}`, y una caligráfica en `\mathcal{S}`. Se reconocen las fuentes de
+  Computer Modern, STIX y newtx.
 - **Símbolos Unicode** (`converters/mathfix.py`) — en vez de traducir símbolo a
   símbolo y producir `si $\alpha$ $\leq$ $\beta$`, detecta el tramo matemático
   completo y escribe `si $\alpha \leq \beta$`.
@@ -145,7 +151,14 @@ la tipografía para deducir lo que se perdió:
 Además se limpian los residuos habituales de un PDF: encabezados repetidos en
 cada página, números de página sueltos, el índice con puntos suspensivos (se
 cambia por `\tableofcontents`), el logotipo de LaTeX descompuesto en letras y
-los niveles de los títulos deducidos de su numeración.
+los niveles de los títulos deducidos de su numeración. Los listados de código,
+que el extractor aplasta en un solo párrafo, vuelven como bloques de código con
+su sangría y sin los números de línea.
+
+Con los papers del benchmark, el `.tex` que sale compila con pdflatex sin
+errores. Los caracteres que el PDF
+no asocia a ningún Unicode no se pueden recuperar: se quedan en el código y se
+imprimen como `□`, para que sea fácil encontrarlos y corregirlos.
 
 ### Fórmulas apiladas: el OCR
 

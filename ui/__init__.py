@@ -34,7 +34,7 @@ try:
 except ImportError:      # sin PyMuPDF la app arranca igual, sin conversor
     pass
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 SCRATCH_DIR = PROJECT_DIR / "documentos"

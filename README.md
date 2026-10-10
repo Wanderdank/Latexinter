@@ -60,7 +60,13 @@ and the fonts to work out what was lost:
 - **Big operators:** TeX's math fonts store the integral sign in the slot of
   `Z` and the summation sign in the slot of `X`. Latexinter translates them back.
 - **Display equations** are recognized because they're centered and set almost
-  entirely in math fonts. Latexinter reassembles the pieces the extractor split up.
+  entirely in math fonts. Latexinter reads the whole equation at once: it finds
+  the fraction bars among the page's drawings and stacks what's above and below
+  into `\frac{…}{…}`, hangs limits on `∑` and `lim`, and puts accents like `ˆ`
+  back on their letter.
+- **Font alphabets:** a letter in a blackboard font becomes `\mathbb{E}`, one in
+  a calligraphic font `\mathcal{S}`. Computer Modern, STIX and newtx fonts are
+  recognized.
 - **Unicode symbols** ([`mathfix.py`](converters/mathfix.py)): instead of
   `if $\alpha$ $\leq$ $\beta$`, it detects the whole math run and writes
   `if $\alpha \leq \beta$`.
@@ -81,6 +87,13 @@ It also cleans up the usual PDF debris:
 - A dotted table of contents, replaced with `\tableofcontents`.
 - The LaTeX logo broken into letters.
 - Heading levels, worked out from the section numbers.
+- Code listings, which the extractor mashes into one paragraph. They come back
+  as code blocks with their indentation and without the line numbers.
+
+On the benchmark's papers, the `.tex` it writes compiles with pdflatex without
+errors. Characters the PDF
+doesn't map to Unicode can't be recovered: they're kept in the source and
+print as `□`, so they're easy to find and fix.
 
 ## Install
 
