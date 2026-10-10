@@ -50,6 +50,16 @@ BIG_OPERATORS: dict[str, str] = {
     "]": "\\biguplus", "^": "\\bigwedge", "_": "\\bigvee",
 }
 
+# Los delimitadores grandes de esa misma fuente ocupan los códigos de control
+# 0x00-0x21: sin traducir, pdflatex se encuentra caracteres invisibles.
+_CMEX_DELIMITERS = (
+    "( ) [ ] \\lfloor \\rfloor \\lceil \\rceil \\{ \\} \\langle \\rangle | \\| / \\backslash "
+    "( ) ( ) [ ] \\lfloor \\rfloor \\lceil \\rceil \\{ \\} \\langle \\rangle / \\backslash ( )"
+).split()
+BIG_DELIMITERS: dict[str, str] = {
+    chr(code): latex for code, latex in enumerate(_CMEX_DELIMITERS) if chr(code) not in "\t\n\r"
+}
+
 _BIG_OPERATOR_START = re.compile(
     r"^(\\(?:int|iint|iiint|oint|sum|prod|coprod|big[a-z]+))"
 )
@@ -287,7 +297,7 @@ def _span_text(span: dict) -> str:
     """Texto de un fragmento, traduciendo la fuente de operadores grandes."""
     text = span["text"].strip()
     if EXTENSION_FONT_RE.search(span.get("font", "")):
-        translated = [BIG_OPERATORS.get(ch) for ch in text]
+        translated = [BIG_OPERATORS.get(ch) or BIG_DELIMITERS.get(ch) for ch in text]
         if any(translated):
             return "".join(
                 cmd + " " if cmd else ch for cmd, ch in zip(translated, text)
@@ -313,6 +323,12 @@ def _reconstruct_line(spans: list[dict]) -> str:
             open_scripts.pop()
             pieces.append("}")
 
+    def append(piece: str) -> None:
+        if pieces:
+            pieces[-1] = mathfix.join_math(pieces[-1], piece)
+        else:
+            pieces.append(piece)
+
     for span in spans:
         text = span["text"].strip()
         if not text:
@@ -333,13 +349,13 @@ def _reconstruct_line(spans: list[dict]) -> str:
             )
             if gap and pieces:
                 pieces.append("\\;")
-            pieces.append(_span_text(span))
+            append(_span_text(span))
         else:
             close_to(size)
             if not open_scripts or open_scripts[-1] > size:
                 pieces.append(("^" if kind == "sup" else "_") + "{")
                 open_scripts.append(size)
-            pieces.append(_script_body(text))
+            append(_script_body(text))
 
         previous_right = span["bbox"][2]
         previous_was_operator = bool(

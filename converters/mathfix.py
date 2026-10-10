@@ -68,6 +68,12 @@ TEXT_SYMBOLS_IN_MATH: dict[str, str] = {
     "\u2013": "-", "\u2014": "-", "\u2010": "-", "\u2011": "-", "\u2012": "-",
     "\u2018": "'", "\u2019": "'",
     "\u00a0": "\\,", "\u2009": "\\,", "\u202f": "\\,",
+    "\u2020": "\\dagger", "\u2021": "\\ddagger",
+    # Acentos sueltos: en texto pdflatex los imprime, en una f\u00f3rmula no.
+    "\u02c6": "\\hat{}", "\u02dc": "\\tilde{}", "\u02c7": "\\check{}",
+    "\u02d9": "\\dot{}", "\u02d8": "\\breve{}", "\u02da": "\\mathring{}",
+    # Las íes sin punto: en texto la ı es turca y pdflatex ya la imprime.
+    "\u0131": "\\imath", "\u0237": "\\jmath",
     "\u00bd": "\\tfrac{1}{2}", "\u00bc": "\\tfrac{1}{4}", "\u00be": "\\tfrac{3}{4}",
     "\u2153": "\\tfrac{1}{3}", "\u2154": "\\tfrac{2}{3}",
     "\u200b": "", "\ufeff": "", "\u00ad": "",
@@ -102,6 +108,15 @@ MATH_SYMBOLS: dict[str, str] = {
     "\u2248": "\\approx", "\u2245": "\\cong", "\u2261": "\\equiv", "\u223c": "\\sim",
     "\u2243": "\\simeq", "\u221d": "\\propto", "\u2225": "\\parallel", "\u22a5": "\\perp",
     "\u2254": ":=", "\u225c": "\\triangleq", "\u2250": "\\doteq",
+    "\u2272": "\\lesssim", "\u2273": "\\gtrsim", "\u227a": "\\prec", "\u227b": "\\succ",
+    "\u227c": "\\preccurlyeq", "\u227d": "\\succcurlyeq", "\u2aaf": "\\preceq",
+    "\u2ab0": "\\succeq", "\u224d": "\\asymp", "\u2224": "\\nmid", "\u2226": "\\nparallel",
+    "\u2270": "\\nleq", "\u2271": "\\ngeq", "\u2a7d": "\\leqslant", "\u2a7e": "\\geqslant",
+    "\u22a2": "\\vdash", "\u22a8": "\\models", "\u22a4": "\\top", "\u27c2": "\\perp",
+    "\u2291": "\\sqsubseteq", "\u2292": "\\sqsupseteq", "\u2284": "\\not\\subset",
+    "\u2288": "\\nsubseteq",
+    "\u228e": "\\uplus", "\u2293": "\\sqcap", "\u2294": "\\sqcup", "\u2240": "\\wr",
+    "\u22c0": "\\bigwedge", "\u22c1": "\\bigvee", "\u2a01": "\\bigoplus", "\u2a02": "\\bigotimes",
     # Cálculo y conjuntos
     "\u221e": "\\infty", "\u2202": "\\partial", "\u2207": "\\nabla",
     "\u2211": "\\sum", "\u220f": "\\prod", "\u2210": "\\coprod",
@@ -120,10 +135,17 @@ MATH_SYMBOLS: dict[str, str] = {
     "\u21a6": "\\mapsto", "\u27f6": "\\longrightarrow", "\u27f5": "\\longleftarrow",
     "\u27f9": "\\Longrightarrow", "\u21c0": "\\rightharpoonup", "\u21bc": "\\leftharpoonup",
     "\u2197": "\\nearrow", "\u2198": "\\searrow",
+    "\u27f8": "\\Longleftarrow", "\u27fa": "\\Longleftrightarrow", "\u27fc": "\\longmapsto",
+    "\u21aa": "\\hookrightarrow", "\u21a9": "\\hookleftarrow", "\u21dd": "\\leadsto",
+    "\u21c4": "\\rightleftarrows", "\u21cc": "\\rightleftharpoons",
     # Delimitadores y varios
     "\u2308": "\\lceil", "\u2309": "\\rceil", "\u230a": "\\lfloor", "\u230b": "\\rfloor",
     "\u27e8": "\\langle", "\u27e9": "\\rangle", "\u2329": "\\langle", "\u232a": "\\rangle",
     "\u2223": "\\mid", "\u2016": "\\|",
+    "\u2206": "\\Delta", "\u2113": "\\ell", "\u2127": "\\mho", "\u03f0": "\\varkappa",
+    "\u2201": "\\complement", "\u210e": "h", "\u25e6": "\\circ",
+    "\u25a0": "\\blacksquare", "\u220e": "\\blacksquare", "\u25bd": "\\triangledown",
+    "\u25b5": "\\vartriangle", "\u2662": "\\diamondsuit", "\u2663": "\\clubsuit",
     "\u2032": "'", "\u2033": "''", "\u2034": "'''",
     "\u2135": "\\aleph", "\u210f": "\\hbar", "\u2118": "\\wp",
     "\u2111": "\\Im", "\u211c": "\\Re", "\u2220": "\\angle", "\u2221": "\\measuredangle",
@@ -184,17 +206,64 @@ _ALPHABET_RANGES = [
 ]
 
 
+# Las griegas vienen en bloques de 58: 25 mayúsculas, ∇, 25 minúsculas, ∂ y
+# seis variantes. Las mayúsculas y minúsculas siguen el orden de U+0391 y
+# U+03B1, con ϴ y ς en el hueco 17.
+_GREEK_RANGES = [
+    (0x1D6A8, True), (0x1D6E2, False), (0x1D71C, True), (0x1D756, True), (0x1D790, True),
+]
+_GREEK_TAIL = "\u2202\u03f5\u03d1\u03f0\u03d5\u03f1\u03d6"   # ∂ϵϑϰϕϱϖ
+_GREEK_LIKE_LATIN = dict(zip("ΑΒΕΖΗΙΚΜΝΟΡΤΧο", "ABEZHIKMNOPTXo"))
+
+
+def _math_greek(cp: int) -> Optional[str]:
+    for start, bold in _GREEK_RANGES:
+        offset = cp - start
+        if not 0 <= offset < 58:
+            continue
+        if offset < 25:
+            ch = "\u03f4" if offset == 17 else chr(0x391 + offset)
+        elif offset == 25:
+            ch = "\u2207"
+        elif offset < 51:
+            ch = chr(0x3B1 + offset - 26)
+        else:
+            ch = _GREEK_TAIL[offset - 51]
+        if ch in _GREEK_LIKE_LATIN:
+            latex = _GREEK_LIKE_LATIN[ch]
+            return "\\mathbf{" + latex + "}" if bold else latex
+        latex = "\\Theta" if ch == "\u03f4" else MATH_SYMBOLS[ch]
+        return "\\boldsymbol{" + latex + "}" if bold else latex
+    return None
+
+
 def _math_alphanumeric(ch: str) -> Optional[str]:
     """Traduce los 'Mathematical Alphanumeric Symbols' a su comando LaTeX."""
     cp = ord(ch)
     if 0x1D7CE <= cp <= 0x1D7FF:                      # dígitos estilizados
         return str((cp - 0x1D7CE) % 10)
+    if cp in (0x1D6A4, 0x1D6A5):                      # ı y ȷ cursivas
+        return "\\imath" if cp == 0x1D6A4 else "\\jmath"
+    if 0x1D6A8 <= cp < 0x1D7CE:
+        return _math_greek(cp)
     for start, template in _ALPHABET_RANGES:
         if start <= cp < start + 52:
             offset = cp - start
             letter = chr(ord("A") + offset) if offset < 26 else chr(ord("a") + offset - 26)
             return template % letter
     return None
+
+
+def repair_truncated_alphanumerics(text: str) -> str:
+    """
+    Algunas fuentes (newtx, STIX) traen mal el mapa a Unicode de sus letras
+    matemáticas: 𝑥 (U+1D465) se extrae como 푥 (U+D465), una sílaba coreana.
+    Si el documento no tiene más texto en coreano, esas «sílabas» son letras
+    matemáticas recortadas a 16 bits y se recuperan.
+    """
+    if not re.search("[\ud400-\ud7ff]", text) or re.search("[\uac00-\ud3ff]", text):
+        return text
+    return re.sub("[\ud400-\ud7ff]", lambda m: chr(ord(m.group()) + 0x10000), text)
 
 
 def _symbol_to_latex(ch: str) -> Optional[str]:
@@ -306,6 +375,125 @@ def _wrap_script(marker: str, content: str) -> str:
     return marker + "{" + content + "}"
 
 
+_ENDS_IN_COMMAND = re.compile(r"\\[A-Za-z]+$")
+
+
+def join_math(left: str, right: str) -> str:
+    """Une dos trozos de fórmula sin pegar un comando a la letra siguiente
+    ("\\langle" + "x" daría el comando inexistente \\langlex)."""
+    if _ENDS_IN_COMMAND.search(left) and right[:1].isalpha():
+        return left + " " + right
+    return left + right
+
+
+def _script_argument(body: str, pos: int) -> tuple[Optional[str], int]:
+    """Argumento de un ^ o _ que empieza en pos: (contenido, fin)."""
+    while pos < len(body) and body[pos] in " \t":
+        pos += 1
+    if pos >= len(body):
+        return None, pos
+    if body[pos] == "{":
+        depth = 0
+        i = pos
+        while i < len(body):
+            if body[i] == "\\":
+                i += 2
+                continue
+            if body[i] == "{":
+                depth += 1
+            elif body[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    return body[pos + 1:i], i + 1
+            i += 1
+        return None, pos
+    command = re.match(r"\\(?:[A-Za-z]+|.)", body[pos:])
+    if command:
+        return command.group(), pos + command.end()
+    if body[pos] in "}^_":
+        return None, pos
+    return body[pos], pos + 1
+
+
+def merge_double_scripts(body: str) -> str:
+    """
+    x^{a}^{b} → x^{ab}. Cuando el PDF guarda cada glifo de un índice por
+    separado, la reconstrucción los encadena así, y pdflatex lo rechaza con
+    «Double superscript».
+    """
+    if body.count("^") + body.count("_") < 2:
+        return body
+    out: list[str] = []
+    i = 0
+    while i < len(body):
+        ch = body[i]
+        if ch == "\\":
+            out.append(body[i:i + 2])
+            i += 2
+            continue
+        if ch not in "^_":
+            out.append(ch)
+            i += 1
+            continue
+        first, end = _script_argument(body, i + 1)
+        if first is None:
+            out.append(ch)
+            i += 1
+            continue
+        parts = [first]
+        following = end
+        while True:
+            while following < len(body) and body[following] in " \t":
+                following += 1
+            if following >= len(body) or body[following] != ch:
+                break
+            more, more_end = _script_argument(body, following + 1)
+            if more is None:
+                break
+            parts.append(more)
+            end = following = more_end
+        if len(parts) == 1:
+            braced = body[i + 1:end].lstrip().startswith("{")
+            out.append(ch + "{" + merge_double_scripts(first) + "}" if braced else body[i:end])
+        else:
+            merged = parts[0]
+            for part in parts[1:]:
+                merged = join_math(merged, part)
+            out.append(ch + "{" + merge_double_scripts(merged) + "}")
+        i = end
+    return "".join(out)
+
+
+def balance_braces(fragment: str) -> str:
+    """
+    Escapa las llaves sin pareja de una fórmula. Suelen ser llaves de verdad
+    del PDF, como las de un conjunto {x | x ≤ 1} partido entre texto y
+    fórmula, y sin escapar rompen la compilación.
+    """
+    unmatched: set[int] = set()
+    opened: list[int] = []
+    i = 0
+    while i < len(fragment):
+        ch = fragment[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == "{":
+            opened.append(i)
+        elif ch == "}":
+            if opened:
+                opened.pop()
+            else:
+                unmatched.add(i)
+        i += 1
+    unmatched.update(opened)
+    if not unmatched:
+        return fragment
+    return "".join(
+        "\\" + ch if i in unmatched else ch for i, ch in enumerate(fragment)
+    )
+
+
 def _tidy_math(body: str) -> str:
     """Retoques finales sobre el interior de una fórmula."""
     # Raíces: el glifo suelto no lleva argumento, aquí se lo damos.
@@ -329,7 +517,7 @@ def _tidy_math(body: str) -> str:
     # El espacio ancho no pinta nada pegado a un operador binario.
     body = re.sub(r"\\;\s*(?=[-+=<>])", "", body)
     body = re.sub(r"(?<=[-+=<>])\s*\\;", "", body)
-    return body.strip()
+    return merge_double_scripts(body.strip())
 
 
 def _render_tokens(tokens: list[_Token]) -> str:
@@ -444,12 +632,12 @@ def _merge_adjacent_math(text: str) -> str:
 # Relaciones y operadores que siempre esperan un operando a su lado.
 _BINARY_END = re.compile(
     r"(?:\\(?:leq|geq|neq|approx|equiv|sim|simeq|cong|ll|gg|in|notin|subset|"
-    r"subseteq|supset|pm|mp|times|div|cdot|leqq|geqq|propto|to|rightarrow)\s*"
+    r"subseteq|supset|pm|mp|times|div|cdot|leqq|geqq|propto|to|rightarrow|lesssim|gtrsim|prec|succ|preceq|succeq)\s*"
     r"|[=<>+\-])$"
 )
 _BINARY_START = re.compile(
     r"^(?:\\(?:leq|geq|neq|approx|equiv|sim|simeq|cong|ll|gg|in|notin|subset|"
-    r"subseteq|supset|pm|mp|times|div|cdot|leqq|geqq|propto|to|rightarrow)\b"
+    r"subseteq|supset|pm|mp|times|div|cdot|leqq|geqq|propto|to|rightarrow|lesssim|gtrsim|prec|succ|preceq|succeq)\b"
     r"|[=<>])"
 )
 
@@ -548,6 +736,7 @@ def latexify_markdown(md: str) -> str:
     matemático agrupado. El resultado sigue siendo Markdown válido: pandoc lo
     leerá con  markdown+tex_math_dollars+raw_tex.
     """
+    md = repair_truncated_alphanumerics(md)
     verbatim = _Vault(kind=1)
     md = _MD_VERBATIM.sub(lambda m: verbatim.stash(m.group(0)), md)
 
@@ -635,7 +824,25 @@ def _translate_inside_math(fragment: str) -> str:
             out.append(cmd + " " if following.isalnum() else cmd)
         else:
             out.append(cmd)
-    return "".join(out)
+    return _COMBINING_AFTER.sub(_apply_combining, "".join(out))
+
+
+# Acentos que Unicode escribe detrás de la letra (x⃗ = x + U+20D7).
+COMBINING_ACCENTS: dict[str, str] = {
+    "̂": "\\hat", "̃": "\\tilde", "̄": "\\bar", "̅": "\\bar",
+    "̇": "\\dot", "̈": "\\ddot", "̌": "\\check", "̆": "\\breve",
+    "⃗": "\\vec", "⃑": "\\vec", "̸": "\\not",
+}
+_COMBINING_AFTER = re.compile(
+    r"(\\[A-Za-z]+|\{[^{}]*\}|[A-Za-z0-9=<>])\s*([" + "".join(COMBINING_ACCENTS) + r"])"
+)
+
+
+def _apply_combining(match: re.Match) -> str:
+    base, accent = match.group(1), COMBINING_ACCENTS[match.group(2)]
+    if accent == "\\not":
+        return "\\not" + (base if base.startswith("\\") else " " + base)
+    return accent + (base if base.startswith("{") else "{" + base + "}")
 
 
 def latexify_tex(tex: str) -> str:
@@ -648,7 +855,12 @@ def latexify_tex(tex: str) -> str:
     tex = _TEX_UNTOUCHABLE.sub(lambda m: untouchable.stash(m.group(0)), tex)
 
     math = _Vault(kind=3)
-    tex = _TEX_MATH.sub(lambda m: math.stash(_translate_inside_math(m.group(0))), tex)
+    tex = _TEX_MATH.sub(
+        lambda m: math.stash(
+            merge_double_scripts(balance_braces(_translate_inside_math(m.group(0))))
+        ),
+        tex,
+    )
 
     # Texto normal: primero los símbolos tipográficos…
     for ch, repl in TEXT_SYMBOLS.items():
@@ -693,16 +905,27 @@ def count_math(tex: str) -> int:
     return count
 
 
+# Símbolos fuera del latín que inputenc ya sabe imprimir en texto: acentos
+# sueltos (ˆ ˇ ˘ ˙ ˚ ˛ ˜ ˝) y tipografía.
+_KNOWN_TO_PDFLATEX = set(
+    "ˆˇ˘˙˚˛˜˝"
+    "–—‘’‚“”„†‡•…"
+    "‰‹›€™"
+)
+
+
 def remaining_unicode(tex: str) -> set[str]:
     """
     Caracteres no ASCII que quedaron sin traducir y que pdflatex podría
-    rechazar. Se ignoran los acentos latinos, que inputenc sí maneja.
+    rechazar. Se ignoran las letras latinas con acentos, que inputenc sí
+    maneja, y lo que va en comentarios, que pdflatex no lee.
     """
-    safe = set("áéíóúüñÁÉÍÓÚÜÑàèìòùâêîôûäëïöüçÇºª¿¡€“”‘’")
+    tex = re.sub(r"(?<!\\)%[^\n]*", "", tex)
     return {
         c for c in tex
         if ord(c) > 127
-        and c not in safe
-        and not (0xE000 <= ord(c) <= 0xF8FF)     # marcadores internos
-        and not (0x2500 <= ord(c) <= 0x257F)     # adornos de los comentarios
+        and not (0xA0 <= ord(c) <= 0x24F)        # latín con acentos
+        and not (0x1E00 <= ord(c) <= 0x1EFF)
+        and c not in _KNOWN_TO_PDFLATEX
+        and not (0xE000 <= ord(c) <= 0xE0FF)     # marcadores internos
     }

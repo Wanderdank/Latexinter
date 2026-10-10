@@ -10,6 +10,7 @@ primera y siga siendo cómodo de editar a mano.
 from __future__ import annotations
 
 import re
+import unicodedata
 from pathlib import Path
 
 from . import mathfix
@@ -55,6 +56,31 @@ def ensure_packages(content: str, extra: list[str] | None = None) -> str:
         "\n% ── Paquetes añadidos por Latexinter ─────────────────────\n"
         + "\n".join(missing)
         + "\n\n"
+    )
+    return content[:anchor] + block + content[anchor:]
+
+
+def declare_unknown_characters(content: str, characters: set[str]) -> str:
+    """
+    Los caracteres que no se supieron traducir harían fallar a pdflatex: se
+    declaran en el preámbulo para que compile. Los que no se ven (marcas de
+    combinación, trozos de llaves grandes de uso privado) no imprimen nada;
+    el resto, un cuadrito que avisa de que ahí había algo. En el texto se
+    quedan tal cual, para que se puedan buscar y arreglar a mano.
+    """
+    if not characters:
+        return content
+    anchor = content.find("\\begin{document}")
+    if anchor == -1:
+        return content
+    lines = []
+    for ch in sorted(characters):
+        invisible = unicodedata.category(ch) in ("Mn", "Me", "Co", "Cf")
+        output = "" if invisible else "\\ensuremath{\\square}"
+        lines.append(f"  \\DeclareUnicodeCharacter{{{ord(ch):04X}}}{{{output}}}")
+    block = (
+        "% ── Caracteres del PDF que no se supieron traducir ───────\n"
+        "\\ifPDFTeX\n" + "\n".join(lines) + "\n\\fi\n\n"
     )
     return content[:anchor] + block + content[anchor:]
 
@@ -115,6 +141,8 @@ def postprocess(
     tex_path = Path(tex_path)
     content = tex_path.read_text(encoding="utf-8")
 
+    # Caracteres de control que se cuelan desde el PDF: pdflatex no los acepta.
+    content = re.sub(r"[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]", "", content)
     content = mathfix.latexify_tex(content)
     content = strip_pandoc_noise(content)
     if twocolumn:
@@ -124,7 +152,8 @@ def postprocess(
     # sus caracteres de adorno no le importan a pdflatex.
     leftovers = mathfix.remaining_unicode(content)
 
-    content = ensure_packages(content, extra_packages)
+    content = ensure_packages(content, ["\\usepackage{iftex}", *(extra_packages or [])])
+    content = declare_unknown_characters(content, leftovers)
     content = add_header(content, source, tool)
     tex_path.write_text(content, encoding="utf-8")
 

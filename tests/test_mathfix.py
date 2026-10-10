@@ -23,3 +23,29 @@ def test_latexify_tex_respeta_los_comentarios():
 
 def test_count_math():
     assert mathfix.count_math(r"$a$ y $$b$$ y \(c\)") == 3
+
+
+def test_une_los_indices_partidos_glifo_a_glifo():
+    assert mathfix.merge_double_scripts(r"e^{(}^{x}^{-}^{c}^{)}") == r"e^{(x-c)}"
+    assert mathfix.merge_double_scripts(r"a^{\beta}^{x}") == r"a^{\beta x}"
+    assert mathfix.merge_double_scripts(r"x_{i}^{2}") == r"x_{i}^{2}"
+
+
+def test_escapa_las_llaves_sin_pareja():
+    assert mathfix.balance_braces(r"\(x \leq 1}\)") == r"\(x \leq 1\}\)"
+    assert mathfix.balance_braces(r"\left\{ x^{2} \right\}") == r"\left\{ x^{2} \right\}"
+
+
+def test_recupera_letras_matematicas_recortadas():
+    # 𝑥 y 𝛽 extraídos como sílabas coreanas (U+D465, U+D6FD)
+    assert mathfix.repair_truncated_alphanumerics("sea 푥 y 훽") == "sea \U0001D465 y \U0001D6FD"
+    # Un texto que de verdad está en coreano no se toca.
+    assert mathfix.repair_truncated_alphanumerics("한국어 푥") == "한국어 푥"
+
+
+def test_acentos_combinados_dentro_de_una_formula():
+    assert mathfix.latexify_tex("\\(x\u20d7 + \\alpha\u0302\\)") == r"\(\vec{x} + \hat{\alpha}\)"
+
+
+def test_griegas_y_simbolos_poco_comunes():
+    assert mathfix.latexify_tex("\U0001D703 y ∆ y ℓ") == r"$\theta$ y $\Delta$ y $\ell$"
