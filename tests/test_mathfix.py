@@ -59,3 +59,17 @@ def test_comando_matematico_suelto_en_el_texto():
 
 def test_indices_alternados():
     assert mathfix.merge_double_scripts(r"\gamma_{1}^{s}_{,b}") == r"\gamma_{1,b}^{s}"
+
+
+def test_prima_detras_de_un_superindice():
+    assert mathfix.merge_double_scripts("S_{r}^{z}'(0)") == r"S_{r}^{z\prime}(0)"
+    assert mathfix.merge_double_scripts("x_{i}'") == "x_{i}'"
+
+
+def test_raiz_de_una_fraccion():
+    assert mathfix._tidy_math(r"\surd\frac{1}{N}") == r"\sqrt{\frac{1}{N}}"
+
+
+def test_prima_entre_indices_y_acento_en_un_indice():
+    assert mathfix.merge_double_scripts("x_{a}'_{b}") == r"x_{ab}^{\prime}"
+    assert mathfix.latexify_tex("\(d^3\u20d7\)") == r"\(d^{\vec{3}}\)"

@@ -72,6 +72,8 @@ BIG_DELIMITERS.update({
     "D": "\\langle", "E": "\\rangle",
     "h": "[", "i": "]", "j": "\\lfloor", "k": "\\rfloor", "l": "\\lceil", "m": "\\rceil",
     "n": "\\{", "o": "\\}",
+    # El signo de raíz, en sus cuatro tamaños.
+    "p": "\\surd", "q": "\\surd", "r": "\\surd", "s": "\\surd",
 })
 BIG_DELIMITERS.update({chr(code): "" for code in range(0x30, 0x44)})
 
@@ -356,6 +358,38 @@ def _span_text(span: dict) -> str:
     return _to_math(_styled(text, span))
 
 
+def _normalize_extension(spans: list[dict]) -> list[dict]:
+    """
+    Los glifos de la fuente de extensión (∑, ∫, paréntesis grandes) cuelgan
+    por debajo de su línea base, que TeX pone arriba del todo, y el extractor
+    les da una caja de unos pocos puntos. Se les pone la caja de verdad —desde
+    el origen hasta el simétrico respecto al eje del renglón— y la línea base
+    y el cuerpo del renglón, para que no parezcan índices.
+    """
+    if not any(EXTENSION_FONT_RE.search(s.get("font", "")) for s in spans):
+        return spans
+    normales = [s for s in spans if not EXTENSION_FONT_RE.search(s.get("font", ""))]
+    if not normales:
+        return spans
+    size, _ = _line_baseline(normales)
+    bases = sorted(s["origin"][1] for s in normales if abs(s["size"] - size) < 0.6)
+    salida = []
+    for span in spans:
+        if "latex" in span or not EXTENSION_FONT_RE.search(span.get("font", "")):
+            salida.append(span)
+            continue
+        arriba = min(span["origin"][1], span["bbox"][1])
+        debajo = [b for b in bases if b > arriba]
+        base = min(debajo) if debajo else (bases[-1] if bases else span["origin"][1])
+        eje = base - 0.25 * size
+        nuevo = dict(span)
+        nuevo["bbox"] = (span["bbox"][0], arriba, span["bbox"][2], max(span["bbox"][3], 2 * eje - arriba))
+        nuevo["origin"] = (span["bbox"][0], base)
+        nuevo["size"] = size
+        salida.append(nuevo)
+    return salida
+
+
 def _reconstruct_line(spans: list[dict]) -> str:
     """
     LaTeX de una línea completa. Los índices se anidan por tamaño de letra:
@@ -364,11 +398,11 @@ def _reconstruct_line(spans: list[dict]) -> str:
     """
     if any(_accent_of(span) for span in spans):
         spans = sorted(_attach_accents(spans), key=lambda s: s["bbox"][0])
+    spans = _normalize_extension(spans)
     base_size, base_y = _line_baseline(spans)
     pieces: list[str] = []
     open_scripts: list[tuple[float, str]] = []      # (tamaño, sup/sub) abiertos
     previous_right: Optional[float] = None
-    previous_was_operator = False
 
     def close_to(size: Optional[float], kind: Optional[str] = None) -> None:
         """
@@ -397,10 +431,6 @@ def _reconstruct_line(spans: list[dict]) -> str:
 
         size = span["size"]
         kind = _script_kind(span, base_size, base_y)
-        # Los operadores grandes tienen el origen muy alto, así que un índice
-        # a su derecha se clasifica mal: en la práctica es el límite superior.
-        if kind == "sub" and previous_was_operator:
-            kind = "sup"
 
         if kind is None:
             close_to(None)
@@ -419,9 +449,6 @@ def _reconstruct_line(spans: list[dict]) -> str:
             append(span["latex"] if "latex" in span else _script_body(_styled(text, span)))
 
         previous_right = span["bbox"][2]
-        previous_was_operator = bool(
-            EXTENSION_FONT_RE.search(span.get("font", ""))
-        )
 
     close_to(None)
     body = re.sub(r"(\\;)+", "\\\\;", "".join(pieces))
@@ -899,16 +926,20 @@ def _attach_accents(items: list[dict]) -> list[dict]:
     for acento in [it for it in items if _accent_of(it)]:
         comando = _accent_of(acento)
         ax, ay = _center(acento["bbox"])
+        # La letra que tiene debajo. Algunos PDF dan a todos los glifos de un
+        # renglón la misma caja de alto, así que basta con que no quede por
+        # encima del acento.
         debajo = [
             it for it in items
-            if it is not acento and "latex" not in it
+            if it is not acento and "latex" not in it and not _accent_of(it)
             and it["bbox"][0] - 1 <= ax <= it["bbox"][2] + 1
-            and _center(it["bbox"])[1] > ay
+            and _center(it["bbox"])[1] >= ay - 0.5
+            and it["bbox"][3] >= acento["bbox"][3] - 1
             and it["bbox"][1] - acento["bbox"][3] < 0.5 * it["size"]
         ]
         if not debajo:
             continue
-        base = min(debajo, key=lambda it: _center(it["bbox"])[1] - ay)
+        base = min(debajo, key=lambda it: (_center(it["bbox"])[1] - ay, abs(_center(it["bbox"])[0] - ax)))
         text = base["text"].strip()
         if not text:
             continue
@@ -953,13 +984,116 @@ def _stack_fractions(items: list[dict], bars: list[tuple]) -> list[dict]:
             return cerca
 
         num, den = lado(True), lado(False)
+        if not num and den:
+            # Una raya con algo solo debajo y un √ justo a su izquierda es el
+            # trazo de una raíz: lo de debajo es el radicando.
+            signo = [
+                it for it in items
+                if _is_radical(it) and "latex" not in it
+                and x0 - 4 <= it["bbox"][2] <= x0 + 3
+            ]
+            if signo:
+                size = max(it["size"] for it in den)
+                latex = "\\sqrt{" + _layout(den) + "}"
+                usados = {id(it) for it in den + signo[:1]}
+                items = [it for it in items if id(it) not in usados]
+                items.append(_piece(latex, den + signo[:1], eje + 0.6 * size, size))
+            continue
         if not num or not den:
-            continue            # el trazo de una raíz, un subrayado…
+            continue            # un subrayado, el filete de una tabla…
         size = max(it["size"] for it in num + den)
         latex = "\\frac{" + _layout(num) + "}{" + _layout(den) + "}"
         usados = {id(it) for it in num + den}
         items = [it for it in items if id(it) not in usados]
         items.append(_piece(latex, num + den, eje, size))
+    return items
+
+
+def _chains(items: list[dict], gap: float) -> list[list[dict]]:
+    """Agrupa en tramos los fragmentos seguidos en horizontal."""
+    tramos: list[list[dict]] = []
+    for it in sorted(items, key=lambda s: s["bbox"][0]):
+        if tramos and it["bbox"][0] - max(s["bbox"][2] for s in tramos[-1]) < gap:
+            tramos[-1].append(it)
+        else:
+            tramos.append([it])
+    return tramos
+
+
+def _span_x(items: list[dict]) -> tuple[float, float]:
+    return min(s["bbox"][0] for s in items), max(s["bbox"][2] for s in items)
+
+
+def _is_radical(span: dict) -> bool:
+    """El signo √, sea el carácter Unicode o el de la fuente de extensión."""
+    text = span["text"].strip()
+    if text == "√":
+        return True
+    return text in ("p", "q", "r", "s") and bool(EXTENSION_FONT_RE.search(span.get("font", "")))
+
+
+def _virtual_fractions(items: list[dict]) -> list[dict]:
+    """
+    Fracciones sin raya. Algunos PDF (los que pasan por Ghostscript, por
+    ejemplo) no guardan la raya como un dibujo, y solo queda la geometría:
+    algo a cuerpo normal por encima del renglón, algo por debajo, en la misma
+    columna, y nada del renglón en medio. Es lo que hacen los programas de
+    reconocimiento por maquetación (Infty, MaxTract): deducir la estructura de
+    las posiciones relativas.
+    """
+    size, _ = _line_baseline(items)
+    if size <= 0:
+        return items
+    normales = [it for it in items if it["size"] >= size - 0.6]
+    # Cada renglón posible, empezando por el que tiene más fragmentos.
+    cuenta: dict[float, int] = {}
+    for it in normales:
+        y = round(it["origin"][1])
+        cuenta[y] = cuenta.get(y, 0) + 1
+    for base in sorted(cuenta, key=lambda y: -cuenta[y]):
+        presentes = {id(it) for it in items}
+        renglon = [it for it in normales if id(it) in presentes and abs(it["origin"][1] - base) < 0.25 * size]
+        if not renglon:
+            continue
+        arriba = [it for it in normales if id(it) in presentes
+                  and 0.3 * size < base - it["origin"][1] < 1.2 * size]
+        abajo = [it for it in normales if id(it) in presentes
+                 and 0.3 * size < it["origin"][1] - base < 1.2 * size]
+        if not arriba or not abajo:
+            continue
+        for num in _chains(arriba, 0.6 * size):
+            nx0, nx1 = _span_x(num)
+            for den in _chains(abajo, 0.6 * size):
+                dx0, dx1 = _span_x(den)
+                solape = min(nx1, dx1) - max(nx0, dx0)
+                if solape < 0.5 * min(nx1 - nx0, dx1 - dx0):
+                    continue
+                x0, x1 = min(nx0, dx0), max(nx1, dx1)
+                # Si el renglón pasa por esa columna, no es una fracción sino
+                # otro renglón (o un índice).
+                if any(r["bbox"][0] < x1 - 1 and r["bbox"][2] > x0 + 1 for r in renglon):
+                    continue
+                if any(id(it) not in presentes for it in num + den):
+                    continue
+                # Los índices del numerador y del denominador van con ellos.
+                metidos = {id(it) for it in num + den}
+                for it in items:
+                    if id(it) in metidos or it["size"] >= size - 0.6:
+                        continue
+                    cx = _center(it["bbox"])[0]
+                    if not x0 - 1 <= cx <= x1 + 1:
+                        continue
+                    dy = it["origin"][1] - base
+                    if -1.6 * size < dy < -0.1 * size:
+                        num = num + [it]
+                    elif 0.1 * size < dy < 1.6 * size:
+                        den = den + [it]
+                latex = "\\frac{" + _layout(num) + "}{" + _layout(den) + "}"
+                usados = {id(it) for it in num + den}
+                items = [it for it in items if id(it) not in usados]
+                items.append(_piece(latex, num + den, base - 0.25 * size, size))
+                presentes = {id(it) for it in items}
+                break
     return items
 
 
@@ -977,7 +1111,7 @@ def _attach_limits(items: list[dict]) -> list[dict]:
             or ("\\" + text if text in _LIMIT_WORDS else None)
         )
         # Una palabra con algo escrito debajo: «minimize» sobre sus variables.
-        palabra = command is None and len(text) >= 3 and text.isalpha()
+        palabra = command is None and re.fullmatch(r"[A-Za-z]{3,}", text) is not None
         if palabra:
             command = "\\text{" + text + "}"
         if command and command not in ("\\int", "\\oint"):
@@ -999,9 +1133,9 @@ def _attach_limits(items: list[dict]) -> list[dict]:
             # cajas de las letras llevan aire de sobra y se solapan.
             if it is op or it["size"] > op["size"] - 0.4:
                 continue
-            if caja[3] - 0.2 * alto < cy < caja[3] + 0.9 * alto:
+            if caja[3] - 0.2 * alto < cy < caja[3] + 1.6 * alto:
                 lado, margen = 0, ancho
-            elif caja[1] - 0.9 * alto < cy < caja[1] + 0.2 * alto:
+            elif caja[1] - 1.6 * alto < cy < caja[1] + 0.2 * alto:
                 lado, margen = 1, 0.3 * ancho
             else:
                 continue
@@ -1024,7 +1158,11 @@ def _attach_limits(items: list[dict]) -> list[dict]:
             latex = "\\underset{" + _layout(abajo) + "}{" + command + "}"
         else:
             latex = command
-            if abajo:
+            filas = _rows(abajo) if abajo else []
+            if len(filas) > 1:
+                # Varias condiciones una debajo de otra: \inf_{\substack{t∈J \\ x∈Ω}}
+                latex += "_{\\substack{" + " \\\\ ".join(_layout(f) for f in filas) + "}}"
+            elif abajo:
                 latex += "_{" + _layout(abajo) + "}"
             if arriba:
                 latex += "^{" + _layout(arriba) + "}"
@@ -1096,12 +1234,21 @@ def reconstruct_region(page, rect: tuple) -> Optional[str]:
     de leer renglón a renglón, que deja el numerador y el denominador uno
     detrás del otro.
     """
-    items = [
-        dict(span)
-        for _, spans in _lines_with_spans(page)
-        for span in spans
-        if _dentro(tuple(span["bbox"]), rect, 2.0)
-    ]
+    todos = [dict(span) for _, spans in _lines_with_spans(page) for span in spans]
+    items = [it for it in todos if _dentro(tuple(it["bbox"]), rect, 2.0)]
+    if not items:
+        return None
+    # Lo pequeño que asoma por arriba o por abajo (el límite de una integral,
+    # el signo de una raíz) también es de la fórmula, aunque la caja que da
+    # el extractor lo deje fuera.
+    cuerpo = max(it["size"] for it in items)
+    for it in todos:
+        cx, cy = _center(it["bbox"])
+        if (it not in items and rect[0] - 2 <= cx <= rect[2] + 2
+                and rect[1] - 0.8 * cuerpo <= cy <= rect[3] + 0.8 * cuerpo
+                and (it["size"] < cuerpo - 0.5 or _is_radical(it)
+                     or _intersecta(tuple(it["bbox"]), rect))):
+            items.append(it)
     # El número de la ecuación, «(5)» suelto a la derecha, no es parte de ella.
     derecha = max((it["bbox"][2] for it in items if not _EQUATION_NUMBER.match(it["text"].strip())),
                   default=0.0)
@@ -1111,14 +1258,14 @@ def reconstruct_region(page, rect: tuple) -> Optional[str]:
     ]
     if not items:
         return None
-    for it in items:
-        # Los glifos grandes (∑, paréntesis que abarcan una fracción) tienen
-        # el origen arriba del todo: se recoloca en el eje, como el resto.
-        if EXTENSION_FONT_RE.search(it.get("font", "")):
-            it["origin"] = (it["bbox"][0], _center(it["bbox"])[1] + 0.25 * it["size"])
     bars = [b for b in _fraction_bars(page) if _dentro(b, rect, 2.0)]
     items = _attach_accents(items)
     items = _stack_fractions(items, bars)
+    if not bars:
+        items = _virtual_fractions(items)
+    # Después de las fracciones: así sus numeradores ya no despistan al buscar
+    # el renglón en que está cada glifo grande.
+    items = _normalize_extension(items)
     items = _attach_limits(items)
     filas = [_layout(fila) for fila in _rows(items)]
     filas = [f for f in filas if f]
@@ -1127,6 +1274,65 @@ def reconstruct_region(page, rect: tuple) -> Optional[str]:
     if len(filas) == 1:
         return filas[0]
     return "\\begin{aligned} " + " \\\\ ".join(filas) + " \\end{aligned}"
+
+
+# ────────────────────────────────────────────────────────────
+# ¿Cuadra una lectura del OCR con los glifos del PDF?
+# ────────────────────────────────────────────────────────────
+
+_ATOM = re.compile(r"\\[A-Za-z]+|\\.|[^\s{}^_&$]")
+# Lo que da forma a la fórmula pero no es ningún glifo.
+_STRUCTURE = {
+    "\\frac", "\\dfrac", "\\tfrac", "\\left", "\\right", "\\big", "\\Big", "\\bigg",
+    "\\Bigg", "\\bigl", "\\bigr", "\\Bigl", "\\Bigr", "\\mathrm", "\\text", "\\mathbb",
+    "\\mathcal", "\\mathbf", "\\boldsymbol", "\\mathit", "\\mathsf", "\\mathfrak",
+    "\\operatorname", "\\begin", "\\end", "\\\\", "\\,", "\\;", "\\:", "\\!", "\\quad",
+    "\\qquad", "\\displaystyle", "\\textstyle", "\\limits", "\\nolimits", "\\underset",
+    "\\overset", "\\mathop", "\\hat", "\\bar", "\\tilde", "\\vec", "\\dot", "\\ddot",
+    "\\widehat", "\\widetilde", "\\overline", "\\underline", "\\sqrt", "\\surd", "\\ ",
+}
+_ENVIRONMENTS = re.compile(r"\\(begin|end)\{[^{}]*\}")
+_ATOM_SYNONYMS = {
+    "\\to": "\\rightarrow", "\\le": "\\leq", "\\ge": "\\geq", "\\ne": "\\neq",
+    "\\cdots": "\\dots", "\\ldots": "\\dots", "\\varepsilon": "\\epsilon",
+    "\\varphi": "\\phi", "\\vert": "|", "\\mid": "|", "\\lbrace": "\\{", "\\rbrace": "\\}",
+    "\\colon": ":", "\\ast": "*", "\\Vert": "\\|", "\\parallel": "\\|",
+}
+
+
+def latex_atoms(latex: str) -> list[str]:
+    """
+    Los glifos que pinta una fórmula: letras, cifras y símbolos, sin la
+    estructura (llaves, \\frac, \\left…). \\lim cuenta como l, i, m, que es
+    lo que hay en el PDF.
+    """
+    atoms: list[str] = []
+    for token in _ATOM.findall(_ENVIRONMENTS.sub(" ", latex)):
+        token = _ATOM_SYNONYMS.get(token, token)
+        if token in _STRUCTURE:
+            continue
+        if token[1:] in mathfix.FUNCTIONS:
+            atoms.extend(token[1:])
+        else:
+            atoms.append(token)
+    return atoms
+
+
+def agreement(latex: str, reference: str) -> float:
+    """
+    Cuánto se parecen los glifos de dos fórmulas (1 = los mismos), sin mirar
+    cómo están colocados. La reconstrucción por geometría lee los glifos
+    exactos del PDF aunque los coloque mal; el OCR los coloca bien pero a
+    veces se inventa alguno. Si los glifos del OCR son los del PDF, su
+    colocación es de fiar.
+    """
+    from collections import Counter
+
+    a, b = Counter(latex_atoms(latex)), Counter(latex_atoms(reference))
+    total = sum(a.values()) + sum(b.values())
+    if not total:
+        return 0.0
+    return 2 * sum((a & b).values()) / total
 
 
 def region_plain_text(page, rect) -> str:

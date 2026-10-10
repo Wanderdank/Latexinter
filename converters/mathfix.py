@@ -438,7 +438,13 @@ def merge_double_scripts(body: str) -> str:
         # Todos los índices seguidos que cuelgan de la misma base.
         groups: list[tuple[str, str, int, int]] = []      # (marca, contenido, desde, hasta)
         pos = i
-        while pos < len(body) and body[pos] in "^_":
+        while pos < len(body) and body[pos] in "^_'":
+            if body[pos] == "'":
+                # Una prima es un superíndice más: S^{z}' → S^{z\prime}.
+                primas = len(body[pos:]) - len(body[pos:].lstrip("'"))
+                groups.append(("^", "\\prime" * primas, pos, pos + primas))
+                pos += primas
+                continue
             arg, arg_end = _script_argument(body, pos + 1)
             if arg is None:
                 break
@@ -500,11 +506,31 @@ def balance_braces(fragment: str) -> str:
     )
 
 
+_SURD_COMMAND = re.compile(r"\\surd\s*(\\[A-Za-z]+)\s?")
+
+
+def _wrap_surd_commands(body: str) -> str:
+    """√ seguido de un comando: el comando entra en la raíz con sus argumentos
+    (\\sqrt{\\frac{1}{N}}, no \\sqrt{\\frac}{1}{N})."""
+    while True:
+        match = _SURD_COMMAND.search(body)
+        if not match:
+            return body
+        end = match.end()
+        while end < len(body) and body[end] == "{":
+            arg, fin = _script_argument(body, end)
+            if arg is None:
+                break
+            end = fin
+        contenido = match.group(1) + body[match.end():end]
+        body = body[:match.start()] + "\\sqrt{" + contenido + "}" + body[end:]
+
+
 def _tidy_math(body: str) -> str:
     """Retoques finales sobre el interior de una fórmula."""
     # Raíces: el glifo suelto no lleva argumento, aquí se lo damos.
     body = re.sub(r"\\surd\s*\(([^()]{1,40})\)", r"\\sqrt{\1}", body)
-    body = re.sub(r"\\surd\s*(\\[A-Za-z]+)\s?", r"\\sqrt{\1}", body)
+    body = _wrap_surd_commands(body)
     body = re.sub(r"\\surd\s*([A-Za-z0-9]+)", r"\\sqrt{\1}", body)
     # Agrupa el contenido de ^ y _ : x^{2}, v_{\mathrm{max}}
     body = re.sub(
@@ -848,7 +874,11 @@ def _apply_combining(match: re.Match) -> str:
     base, accent = match.group(1), COMBINING_ACCENTS[match.group(2)]
     if accent == "\\not":
         return "\\not" + (base if base.startswith("\\") else " " + base)
-    return accent + (base if base.startswith("{") else "{" + base + "}")
+    result = accent + (base if base.startswith("{") else "{" + base + "}")
+    # Detrás de ^ o _ el acento necesita su grupo: d^{\vec{3}}, no d^\vec{3}.
+    if match.string[:match.start()].rstrip().endswith(("^", "_")):
+        result = "{" + result + "}"
+    return result
 
 
 _STRAY_MATH_COMMAND = re.compile(

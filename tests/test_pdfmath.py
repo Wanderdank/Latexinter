@@ -47,3 +47,48 @@ def test_letras_de_pizarra_y_caligraficas():
 def test_sumatorio_de_newtx():
     # La fuente de extensión de newtx lleva el ∑ 0x7D posiciones más arriba.
     assert pdfmath._span_text(span("Õ", 0, 0, 5, 10, 8, font="txexs")) == r"\sum"
+
+
+def test_fraccion_sin_raya():
+    # PDF pasado por Ghostscript: no hay dibujo de la raya, solo el 1 encima
+    # del renglón y el 2 debajo, en una columna donde el renglón no pasa.
+    items = [
+        span("R", 365, 199, 373, 209, 206),
+        span("+", 385, 199, 392, 209, 206, font="CMR10"),
+        span("1", 396, 192, 401, 202, 199.3, font="CMR10"),
+        span("2", 396, 205, 401, 215, 213, font="CMR10"),
+        span("g", 402, 199, 407, 209, 206),
+    ]
+    assert pdfmath._layout(pdfmath._virtual_fractions(items)) == r"R+\frac{1}{2}g"
+
+
+def test_raiz_con_su_raya():
+    items = [
+        span("=", 310, 185, 323, 196, 194, font="CMR12"),
+        span("√", 325, 180, 337, 198, 181, font="CMSY10"),
+        span("π", 337, 185, 343, 196, 194),
+    ]
+    raya = (337, 184, 344, 184.4)
+    piezas = pdfmath._stack_fractions(items, [raya])
+    assert pdfmath._layout(piezas) == r"=\sqrt{\pi}"
+
+
+def test_limites_en_dos_renglones():
+    items = [
+        span("inf", 30, 92, 45, 102, 100, font="CMR10"),
+        span("t∈J", 31, 103, 44, 109, 108, size=7.0),
+        span("x∈Ω", 31, 110, 44, 116, 115, size=7.0),
+    ]
+    assert pdfmath._layout(pdfmath._attach_limits(items)) == r"\inf_{\substack{t\in J \\ x\in \Omega}}"
+
+
+def test_operador_de_la_fuente_de_extension_no_es_un_indice():
+    # La fuente de extensión pone el origen del ∑ arriba del todo y el
+    # extractor le da una caja diminuta.
+    spans = [
+        span("f", 230, 231, 236, 242, 239, size=12.0),
+        span("=", 250, 231, 262, 242, 239, size=12.0, font="CMR12"),
+        span("X", 263, 229, 278, 235, 229, font="CMEX10"),
+        span("x", 279, 231, 285, 242, 239, size=12.0),
+    ]
+    assert pdfmath._reconstruct_line(spans) == r"f=\sum x"

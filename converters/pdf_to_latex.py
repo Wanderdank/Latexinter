@@ -450,14 +450,14 @@ def restore_code_blocks(text: str, page, vault: list[str]) -> str:
         if not match:
             continue
         vault.append(code)
-        marker = f"\n\nLATEXINTERCODIGO{len(vault) - 1}FIN\n\n"
+        marker = f"\n\nXQCODIGOQX{len(vault) - 1}FIN\n\n"
         text = text[:match.start()] + marker + text[match.end():]
     return text
 
 
 def _put_back_code(md: str, vault: list[str]) -> str:
     return re.sub(
-        r"LATEXINTERCODIGO(\d+)FIN",
+        r"XQCODIGOQX(\d+)FIN",
         lambda m: "```\n" + vault[int(m.group(1))] + "\n```",
         md,
     )
@@ -512,6 +512,9 @@ def _ocr_fractions(page, text: str, ocr, log, cache: dict) -> tuple[str, int]:
         latex = _recognize(page, region.rect, region.exclude, ocr, cache)
         if not latex:
             continue
+        # Los glifos tienen que ser los que hay en el PDF.
+        if pdfmath.agreement(latex, pdfmath._to_math(region.plain)) < OCR_MIN_AGREEMENT:
+            continue
         try:
             text, cuantas = re.subn(
                 region.pattern, lambda _m, r=latex: "$" + r + "$", text, count=1
@@ -524,67 +527,106 @@ def _ocr_fractions(page, text: str, ocr, log, cache: dict) -> tuple[str, int]:
     return text, reconocidas
 
 
+# Por debajo de este acuerdo entre los glifos del OCR y los del PDF, la
+# lectura del modelo se descarta y se queda la reconstrucción por geometría.
+OCR_MIN_AGREEMENT = 0.8
+
+
 def _ocr_display(page, equations, ocr, log, cache: dict) -> tuple[list, int]:
     """
-    Decide, ecuación por ecuación, quién la lee mejor.
+    Decide, ecuación por ecuación, quién la lee mejor: la geometría o el OCR.
 
-    El OCR solo entra donde la geometría no llega: donde hay una fracción y la
-    fórmula está apilada. En una ecuación de una sola línea la reconstrucción
-    por maquetación es más de fiar —lee los caracteres del PDF en vez de
-    adivinarlos— y ahí el modelo se equivoca de vez en cuando.
-
-    Si el modelo no saca en claro la ecuación entera, se recurre a un método
-    mixto: la geometría pone las partes de una sola línea y el OCR, solo la
-    fracción. Suele bastar para dejar la fórmula completa.
+    La reconstrucción por geometría lee los glifos exactos del PDF, pero no
+    siempre sabe colocarlos (matrices, casos, raíces). El OCR los coloca bien,
+    pero a veces se inventa alguno. Así que se hacen las dos y se comparan sus
+    glifos: si el OCR usa los mismos que hay en el PDF, su lectura es de fiar
+    y se queda; si no, se queda la geometría.
     """
-    regiones = pdfmath.collect_fraction_regions(page)
     resultado: list = []
     cuantas = 0
 
-    for racimo in pdfmath.cluster_equations(page, equations, regiones):
-        if not racimo.has_fraction:
-            resultado.append(_collapse(racimo, page))
-            continue
-
-        # 1) La ecuación entera de una vez.
-        completo = _recognize(page, racimo.rect, (), ocr, cache)
-        if completo:
-            resultado.append(_replace(racimo.members[0], latex=completo, rect=racimo.rect))
+    for racimo in pdfmath.cluster_equations(page, equations):
+        geometria = _collapse(racimo, page)
+        latex = _best_reading(page, geometria.rect, geometria.latex, ocr, log, cache)
+        if latex != geometria.latex:
             cuantas += 1
-            log(f"  ecuación apilada reconocida: {completo[:70]}")
-            continue
-
-        # 2) Mixto: cada fracción por OCR, el resto por geometría.
-        piezas: list[tuple[float, str]] = []
-        fracciones = [r for r in regiones if pdfmath._intersecta(r.rect, racimo.rect)]
-        reconocidas = 0
-        for region in fracciones:
-            latex = _recognize(page, region.rect, region.exclude, ocr, cache)
-            if latex:
-                piezas.append((region.rect[0], latex))
-                reconocidas += 1
-
-        if not reconocidas:
-            resultado.append(_collapse(racimo, page))
-            continue
-
-        for miembro in racimo.members:
-            # Lo que ya está dentro de una fracción no se repite.
-            if any(pdfmath._dentro(miembro.rect, r.rect, 3) for r in fracciones):
-                continue
-            piezas.append((miembro.rect[0], miembro.latex))
-
-        piezas.sort(key=lambda p: p[0])
-        mezcla = " ".join(texto for _, texto in piezas if texto).strip()
-        if mezcla:
-            resultado.append(_replace(racimo.members[0], latex=mezcla, rect=racimo.rect))
-            cuantas += reconocidas
-            log(f"  ecuación apilada (mixta): {mezcla[:70]}")
-        else:
-            resultado.append(_collapse(racimo, page))
+        resultado.append(_replace(geometria, latex=latex))
 
     resultado.sort(key=lambda e: e.y)
     return resultado, cuantas
+
+
+def _best_reading(page, rect, geometria: Optional[str], ocr, log, cache: dict) -> Optional[str]:
+    """
+    La lectura del OCR si sus glifos son los del PDF; si no, la de la
+    geometría. Sin glifos con que comparar (una fórmula dibujada como imagen),
+    lo que diga el OCR.
+    """
+    if ocr is None:
+        return geometria
+    mejor, acuerdo = None, 0.0
+    for dpi in mathocr.DPI_PREFERIDOS:
+        latex = _read(page, rect, dpi, ocr, cache)
+        if not latex:
+            continue
+        if not geometria:
+            return latex
+        puntos = pdfmath.agreement(latex, geometria)
+        if puntos > acuerdo:
+            mejor, acuerdo = latex, puntos
+        if acuerdo >= 0.95:
+            break
+    if mejor and acuerdo >= OCR_MIN_AGREEMENT:
+        log(f"  ecuación reconocida ({acuerdo:.0%}): {mejor[:70]}")
+        return mejor
+    return geometria
+
+
+def _formula_boxes(page, text: str, boxes: list, mode: str, ocr, log, cache: dict,
+                   vault: list[str]) -> tuple[str, int, list[str], list[tuple]]:
+    """
+    Las ecuaciones destacadas que el modelo de maquetación de pymupdf4llm ya
+    ha localizado (cajas «formula», con su rectángulo y su sitio en el texto).
+    Es lo que hacen MinerU o PP-Structure: primero encontrar la región de la
+    fórmula y luego leerla. Cada una se reconstruye y se pone en su sitio
+    exacto, sin tener que adivinar qué imagen le corresponde.
+
+    Devuelve el texto, cuántas se pusieron, las que se quedaron como imagen
+    (modo comentario) y los rectángulos ya resueltos.
+    """
+    hechas = 0
+    comentadas: list[str] = []
+    rects: list[tuple] = []
+    formulas = [b for b in boxes if b.get("class") == "formula" and b.get("pos")]
+    for caja in sorted(formulas, key=lambda b: -b["pos"][0]):
+        rect = tuple(caja["bbox"])
+        inicio, fin = caja["pos"]
+        latex = _best_reading(page, rect, pdfmath.reconstruct_region(page, rect), ocr, log, cache)
+        if not latex:
+            continue
+        rects.append(rect)
+        trozo = text[inicio:fin]
+        if mode == DISPLAY_COMMENT and _IMAGE_LINK.search(trozo):
+            comentadas.append(latex)
+            continue
+        vault.append("\n\n$$\n" + latex + "\n$$\n\n")
+        text = text[:inicio] + f"\n\nXQFORMULAQX{len(vault) - 1}FIN\n\n" + text[fin:]
+        hechas += 1
+    comentadas.reverse()
+    return text, hechas, comentadas, rects
+
+
+def _put_back_formulas(md: str, vault: list[str]) -> str:
+    return re.sub(r"XQFORMULAQX(\d+)FIN", lambda m: vault[int(m.group(1))], md)
+
+
+def _read(page, rect, dpi: int, ocr, cache: dict) -> Optional[str]:
+    """Una lectura del OCR, guardada por si se vuelve a pedir."""
+    clave = (id(page), tuple(round(v, 1) for v in rect), dpi)
+    if clave not in cache:
+        imagen = mathocr.render_region(page, rect, dpi=dpi)
+        cache[clave] = ocr.recognize(imagen) if imagen is not None else None
+    return cache[clave]
 
 
 def _collapse(racimo, page=None) -> "pdfmath.DisplayEquation":
@@ -779,6 +821,7 @@ def pdf_to_latex(
     ocr_count = 0
     ocr_cache: dict = {}      # una fórmula puede pedirse dos veces por página
     code_vault: list[str] = []
+    formula_vault: list[str] = []
 
     # El OCR solo entra en juego si se pidió y hay un modelo instalado.
     ocr = None
@@ -844,6 +887,19 @@ def pdf_to_latex(
             # Los trozos llegan en el mismo orden que las páginas pedidas.
             page_index = selected[index] if index < len(selected) else None
 
+            # Las ecuaciones que el modelo de maquetación ya localizó van
+            # primero: sus posiciones se refieren al texto tal como llega.
+            resueltas: list[tuple] = []
+            cajas = chunk.get("page_boxes") if isinstance(chunk, dict) else None
+            if (page_index is not None and math_reconstruction and cajas
+                    and display_equations != DISPLAY_IMAGE):
+                text, hechas, comentadas, resueltas = _formula_boxes(
+                    doc[page_index], text, cajas, display_equations,
+                    ocr, log, ocr_cache, formula_vault,
+                )
+                replaced_equations += hechas
+                equations_found.extend((page_index + 1, latex) for latex in comentadas)
+
             # Antes que nada el logotipo: "L[A]TEX" es una A en superíndice y
             # si no se arregla aquí acaba convertido en la fórmula $L^{A}$.
             # Ese mismo superíndice puede desordenar el título que lo lleva,
@@ -870,7 +926,10 @@ def pdf_to_latex(
                 math_fixes += applied
 
                 if display_equations != DISPLAY_IMAGE:
-                    equations = pdfmath.collect_display_equations(page)
+                    equations = [
+                        e for e in pdfmath.collect_display_equations(page)
+                        if not any(pdfmath._intersecta(e.rect, r) for r in resueltas)
+                    ]
                     if equations and ocr is not None:
                         equations, mejoradas = _ocr_display(
                             page, equations, ocr, log, ocr_cache
@@ -924,9 +983,13 @@ def pdf_to_latex(
     if extract_images:
         log(f"Imágenes extraídas: {image_count}")
         if images_dir.exists():
+            # Las imágenes de las ecuaciones que se han cambiado por su LaTeX
+            # ya no las usa nadie.
+            usadas = {Path(destino).name for _, destino in _IMAGE_LINK.findall(md)}
+            for archivo in images_dir.iterdir():
+                if archivo.is_file() and archivo.name not in usadas:
+                    archivo.unlink(missing_ok=True)
             if image_count == 0:
-                # Todas las imágenes eran ecuaciones y se han sustituido por su
-                # LaTeX: los archivos ya no los referencia nadie.
                 shutil.rmtree(images_dir, ignore_errors=True)
             elif any(images_dir.iterdir()):
                 extras.append(images_dir)
@@ -935,6 +998,7 @@ def pdf_to_latex(
 
     log("Traduciendo símbolos a LaTeX matemático…")
     md = _put_back_code(md, code_vault)
+    md = _put_back_formulas(md, formula_vault)
     md = mathfix.latexify_markdown(md)
 
     # El .md tiene que estar junto al .tex para que las rutas relativas de las

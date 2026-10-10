@@ -55,6 +55,18 @@ class Backend:
 
 BACKENDS: tuple[Backend, ...] = (
     Backend(
+        key="mfr",
+        name="Pix2Text-MFR",
+        module="onnxruntime",
+        description=(
+            "El más preciso de los tres y el único que no necesita PyTorch: "
+            "funciona con onnxruntime, que ya viene con Latexinter. El modelo "
+            "se descarga la primera vez."
+        ),
+        install="incluido; descarga el modelo la primera vez",
+        size="120 MB",
+    ),
+    Backend(
         key="pix2tex",
         name="LaTeX-OCR (pix2tex)",
         module="pix2tex",
@@ -176,6 +188,166 @@ def looks_usable(latex: str) -> bool:
 
 
 # ────────────────────────────────────────────────────────────
+# Pix2Text-MFR con onnxruntime
+# ────────────────────────────────────────────────────────────
+#
+# Pix2Text-MFR (https://huggingface.co/breezedeus/pix2text-mfr-1.5, licencia
+# MIT) es un TrOCR reentrenado con imágenes de fórmulas. Viene exportado a
+# ONNX, así que basta onnxruntime —que Latexinter ya trae— y se evita PyTorch,
+# que pesa más de un giga. Lo que hace transformers por debajo se hace aquí a
+# mano: preparar la imagen, el bucle que va eligiendo token a token y pasar
+# los tokens a texto.
+
+MFR_REPO = "breezedeus/pix2text-mfr-1.5"
+MFR_REVISION = "1cef9f0bdcd6a4c63df7de1311fb0894593340cc"
+MFR_FILES = {
+    "encoder_model.onnx": "080a3f660f08bc9ebcacdd96e34be6b6400f8c7e62d7cd0dd8251badc37f610b",
+    "decoder_model.onnx": "917deb98e91a0453c5f234f58a0f32f9fb037de8527c7eb4ed394daf9e692f2a",
+    "tokenizer.json": "4ffbeb2143e6a38324bb6111b7a8109530d38a076a8439aa5777535f0a32758a",
+}
+_MFR_START, _MFR_END, _MFR_SPECIAL = 1, 2, 4
+_MFR_SIZE = 384
+_MFR_MAX_TOKENS = 512
+
+
+def models_dir() -> Path:
+    """Dónde se guardan los modelos descargados (fuera de la carpeta del programa)."""
+    import os
+    import sys
+
+    if sys.platform == "win32" and os.environ.get("LOCALAPPDATA"):
+        return Path(os.environ["LOCALAPPDATA"]) / "Latexinter" / "modelos"
+    return Path.home() / ".cache" / "latexinter"
+
+
+def download_mfr(log: Logger = print) -> Path:
+    """
+    Descarga el modelo la primera vez, comprobando que cada archivo es
+    exactamente el esperado. Devuelve la carpeta donde está.
+    """
+    import hashlib
+    import urllib.request
+
+    carpeta = models_dir() / "pix2text-mfr-1.5"
+    carpeta.mkdir(parents=True, exist_ok=True)
+    for nombre, esperado in MFR_FILES.items():
+        destino = carpeta / nombre
+        if destino.exists():
+            continue
+        url = f"https://huggingface.co/{MFR_REPO}/resolve/{MFR_REVISION}/{nombre}"
+        log(f"Descargando el modelo de fórmulas: {nombre}…")
+        parcial = destino.with_suffix(destino.suffix + ".part")
+        resumen = hashlib.sha256()
+        with urllib.request.urlopen(url, timeout=60) as respuesta, open(parcial, "wb") as salida:
+            while True:
+                bloque = respuesta.read(1 << 20)
+                if not bloque:
+                    break
+                resumen.update(bloque)
+                salida.write(bloque)
+        if resumen.hexdigest() != esperado:
+            parcial.unlink(missing_ok=True)
+            raise ConversionError(f"El archivo descargado {nombre} no es el esperado.")
+        parcial.replace(destino)
+    return carpeta
+
+
+def _byte_decoder() -> dict[str, int]:
+    """El alfabeto de los tokenizadores de nivel byte (el de GPT-2), al revés."""
+    imprimibles = (
+        list(range(ord("!"), ord("~") + 1))
+        + list(range(ord("¡"), ord("¬") + 1))
+        + list(range(ord("®"), ord("ÿ") + 1))
+    )
+    bytes_, caracteres = imprimibles[:], imprimibles[:]
+    extra = 0
+    for byte in range(256):
+        if byte not in imprimibles:
+            bytes_.append(byte)
+            caracteres.append(256 + extra)
+            extra += 1
+    return {chr(c): b for b, c in zip(bytes_, caracteres)}
+
+
+_TOKEN_SUELTO = re.compile(r"\\[A-Za-z]+\*?|\\.|\S")
+
+
+def join_spaced_latex(latex: str) -> str:
+    """
+    El modelo escribe un token por palabra: «\\operatorname* { l i m } _ { T }».
+    Se juntan, dejando un espacio solo donde hace falta (tras un comando, si
+    sigue una letra), y las palabras de texto vuelven a ser texto.
+    """
+    salida = ""
+    for token in _TOKEN_SUELTO.findall(latex):
+        if salida and re.search(r"\\[A-Za-z]+\*?$", salida) and token[0].isalpha():
+            salida += " "
+        salida += token
+    # Dentro de \mathrm{…} la tilde era un espacio de la palabra.
+    salida = re.sub(
+        r"\\(mathrm|text)\{([^{}\\]*)\}",
+        lambda m: "\\" + m.group(1) + "{" + m.group(2).replace("~", " ") + "}",
+        salida,
+    )
+    # «\operatorname*{lim}» es \lim; con texto entre espacios, \text{ and }.
+    salida = re.sub(
+        r"\\operatorname\*?\{(lim|max|min|sup|inf|limsup|liminf|det|exp|log|sin|cos)\}",
+        r"\\\1", salida,
+    )
+    salida = re.sub(r"\\mathrm\{( [^{}]* )\}", r"\\text{\1}", salida)
+    # Un \i suelto (la i sin punto de texto) es ruido del modelo y en una
+    # fórmula ni siquiera compila.
+    salida = re.sub(r"\\i(?![A-Za-z])\s*", "", salida)
+    return salida
+
+
+class MFRModel:
+    """Pix2Text-MFR: imagen de una fórmula → LaTeX."""
+
+    def __init__(self, carpeta: Path):
+        import json
+
+        import onnxruntime
+
+        opciones = onnxruntime.SessionOptions()
+        opciones.log_severity_level = 3
+        proveedores = ["CPUExecutionProvider"]
+        self.encoder = onnxruntime.InferenceSession(
+            str(carpeta / "encoder_model.onnx"), opciones, providers=proveedores
+        )
+        self.decoder = onnxruntime.InferenceSession(
+            str(carpeta / "decoder_model.onnx"), opciones, providers=proveedores
+        )
+        vocabulario = json.loads((carpeta / "tokenizer.json").read_text(encoding="utf-8"))
+        self.tokens = {i: t for t, i in vocabulario["model"]["vocab"].items()}
+        self.bytes = _byte_decoder()
+
+    def __call__(self, imagen) -> str:
+        import numpy as np
+        from PIL import Image
+
+        imagen = imagen.convert("RGB").resize((_MFR_SIZE, _MFR_SIZE), Image.BICUBIC)
+        pixeles = (np.asarray(imagen, dtype=np.float32) / 255.0 - 0.5) / 0.5
+        pixeles = pixeles.transpose(2, 0, 1)[None]
+        estado = self.encoder.run(None, {"pixel_values": pixeles})[0]
+
+        ids = [_MFR_START]
+        for _ in range(_MFR_MAX_TOKENS):
+            logits = self.decoder.run(None, {
+                "input_ids": np.array([ids], dtype=np.int64),
+                "encoder_hidden_states": estado,
+            })[0]
+            siguiente = int(logits[0, -1].argmax())
+            if siguiente == _MFR_END:
+                break
+            ids.append(siguiente)
+
+        texto = "".join(self.tokens.get(i, "") for i in ids if i > _MFR_SPECIAL)
+        crudo = bytes(self.bytes.get(c, 32) for c in texto).decode("utf-8", "replace")
+        return join_spaced_latex(crudo)
+
+
+# ────────────────────────────────────────────────────────────
 # Motor
 # ────────────────────────────────────────────────────────────
 
@@ -241,6 +413,11 @@ class MathOCREngine:
                 return False
             self.log(f"{self.backend.name} listo.")
             return True
+
+    def _load_mfr(self) -> Callable:
+        modelo = MFRModel(download_mfr(self.log))
+        self._modelo = modelo
+        return modelo
 
     def _load_pix2tex(self) -> Callable:
         from pix2tex.cli import LatexOCR
