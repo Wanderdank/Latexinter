@@ -26,7 +26,10 @@ from . import mathfix
 MATH_FONT_RE = re.compile(
     r"CMMI|CMSY|CMEX|CMBSY|MSAM|MSBM|EUSM|EUFM|RSFS|"
     r"MathItalic|MathSymbol|MathExtension|MathJax|"
-    r"STIX.*Math|XITSMath|Cambria\s*Math|Asana.*Math|Math\b|Symbol",
+    r"STIX.*Math|XITSMath|Cambria\s*Math|Asana.*Math|Math\b|Symbol|StandardSym|"
+    # newtx y newpx (Times y Palatino con matemáticas), Euler y MnSymbol
+    r"NewTX|NewPX|tx(?:sy|ex|mia)|px(?:sy|ex|mia)|ntx(?:mi|sy|ex)|npx(?:mi|sy|ex)|"
+    r"EUR[MB]|EUEX|MnSymbol",
     re.IGNORECASE,
 )
 
@@ -39,26 +42,38 @@ _ONLY_DIGITS = re.compile(r"^\d+$")
 # La fuente de extensión de TeX (CMEX / LMMathExtension) guarda los operadores
 # grandes en posiciones ASCII: la integral es una 'Z' y el sumatorio una 'X'.
 # Sin esta tabla, una integral se extrae del PDF como la letra Z.
-EXTENSION_FONT_RE = re.compile(r"MathExtension|CMEX|LMEX", re.IGNORECASE)
+EXTENSION_FONT_RE = re.compile(
+    r"MathExtension|CMEX|LMEX|txex|pxex|ntxex|npxex|EUEX", re.IGNORECASE
+)
 
 BIG_OPERATORS: dict[str, str] = {
-    "H": "\\bigoplus", "I": "\\bigoplus", "J": "\\bigotimes", "K": "\\bigotimes",
-    "L": "\\bigodot", "M": "\\bigodot", "N": "\\oint", "O": "\\oint",
+    "F": "\\bigsqcup", "G": "\\bigsqcup", "H": "\\oint", "I": "\\oint",
+    "J": "\\bigodot", "K": "\\bigodot", "L": "\\bigoplus", "M": "\\bigoplus",
+    "N": "\\bigotimes", "O": "\\bigotimes",
     "P": "\\sum", "Q": "\\prod", "R": "\\int", "S": "\\bigcup", "T": "\\bigcap",
     "U": "\\biguplus", "V": "\\bigwedge", "W": "\\bigvee",
     "X": "\\sum", "Y": "\\prod", "Z": "\\int", "[": "\\bigcup", "\\": "\\bigcap",
-    "]": "\\biguplus", "^": "\\bigwedge", "_": "\\bigvee",
+    "]": "\\biguplus", "^": "\\bigwedge", "_": "\\bigvee", "`": "\\coprod", "a": "\\coprod",
 }
 
-# Los delimitadores grandes de esa misma fuente ocupan los códigos de control
-# 0x00-0x21: sin traducir, pdflatex se encuentra caracteres invisibles.
+# Los delimitadores grandes de esa misma fuente: en tamaño fijo ocupan los
+# códigos de control 0x00-0x2F (sin traducir, pdflatex se encuentra caracteres
+# invisibles) y 'h'-'o'. Los de tamaño variable se componen con piezas
+# (0x30-0x43) que, sueltas, no se pueden leer: se quitan.
 _CMEX_DELIMITERS = (
     "( ) [ ] \\lfloor \\rfloor \\lceil \\rceil \\{ \\} \\langle \\rangle | \\| / \\backslash "
-    "( ) ( ) [ ] \\lfloor \\rfloor \\lceil \\rceil \\{ \\} \\langle \\rangle / \\backslash ( )"
+    "( ) ( ) [ ] \\lfloor \\rfloor \\lceil \\rceil \\{ \\} \\langle \\rangle / \\backslash "
+    "( ) [ ] \\lfloor \\rfloor \\lceil \\rceil \\{ \\} \\langle \\rangle / \\backslash / \\backslash"
 ).split()
 BIG_DELIMITERS: dict[str, str] = {
-    chr(code): latex for code, latex in enumerate(_CMEX_DELIMITERS) if chr(code) not in "\t\n\r"
+    chr(code): latex for code, latex in enumerate(_CMEX_DELIMITERS) if chr(code) not in "\t\n\r "
 }
+BIG_DELIMITERS.update({
+    "D": "\\langle", "E": "\\rangle",
+    "h": "[", "i": "]", "j": "\\lfloor", "k": "\\rfloor", "l": "\\lceil", "m": "\\rceil",
+    "n": "\\{", "o": "\\}",
+})
+BIG_DELIMITERS.update({chr(code): "" for code in range(0x30, 0x44)})
 
 _BIG_OPERATOR_START = re.compile(
     r"^(\\(?:int|iint|iiint|oint|sum|prod|coprod|big[a-z]+))"
@@ -86,7 +101,10 @@ def _line_baseline(spans: list[dict]) -> tuple[float, float]:
         weights[size] = weights.get(size, 0) + len(span["text"].strip())
     if not weights:
         return 0.0, 0.0
-    base_size = max(weights, key=lambda s: (weights[s], s))
+    # El cuerpo es el tamaño mayor con una parte razonable de la línea: en
+    # "p_{1,0}^X p_{0,1}^X" hay más letras en índices que fuera de ellos.
+    total = sum(weights.values())
+    base_size = max(s for s in weights if weights[s] >= 0.2 * total)
 
     baselines = sorted(
         span["origin"][1] for span in spans if round(span["size"], 1) == base_size
@@ -229,9 +247,9 @@ def _page_fixes(page) -> list[MathFix]:
                     i = j
                     continue
 
-                latex = _to_math(base_raw)
-                for kind, text in scripts:
-                    body = _script_body(text)
+                latex = _to_math(_styled(base_raw, spans[i - 1]))
+                for (kind, text), span in zip(scripts, spans[i:j]):
+                    body = _script_body(_styled(text, span))
                     if body:
                         latex += ("^" if kind == "sup" else "_") + "{" + body + "}"
 
@@ -293,16 +311,49 @@ def _union(rects: list[tuple[float, float, float, float]]) -> tuple[float, float
     )
 
 
+# Fuentes cuyas letras son de otro alfabeto: la E de MSBM es 𝔼 y la S de CMSY
+# es 𝒮, pero el PDF las da como letras normales.
+_ALPHABET_FONTS = [
+    (re.compile(r"MSBM|txsyb|pxsyb|STbb|BBold|DoubleStruck|dsrom|bbm", re.IGNORECASE), "\\mathbb{%s}", "[A-Z]"),
+    (re.compile(r"CMSY|CMBSY|txsys|pxsys|LMMathSymbols|MathSymbols", re.IGNORECASE), "\\mathcal{%s}", "[A-Z]"),
+    (re.compile(r"EUFM|EUFB|frak", re.IGNORECASE), "\\mathfrak{%s}", "[A-Za-z]"),
+]
+
+
+def _styled(text: str, span: dict) -> str:
+    """Pasa las letras al alfabeto de su fuente: E en MSBM → \\mathbb{E}."""
+    font = span.get("font", "")
+    for pattern, template, letters in _ALPHABET_FONTS:
+        if pattern.search(font):
+            return re.sub(letters, lambda m: template % m.group(), text)
+    return text
+
+
+def _unshift(text: str) -> str:
+    """
+    La fuente de extensión de newtx/newpx lleva los operadores 0x7D
+    posiciones más arriba que CMEX: su ∑ se extrae como «Í» o «Õ».
+    """
+    return "".join(
+        chr(ord(ch) - 0x7D) if ord(ch) >= 0xC0 and chr(ord(ch) - 0x7D) in BIG_OPERATORS else ch
+        for ch in text
+    )
+
+
 def _span_text(span: dict) -> str:
     """Texto de un fragmento, traduciendo la fuente de operadores grandes."""
+    if "latex" in span:                     # una pieza ya armada: \frac, \sum…
+        return span["latex"]
     text = span["text"].strip()
     if EXTENSION_FONT_RE.search(span.get("font", "")):
-        translated = [BIG_OPERATORS.get(ch) or BIG_DELIMITERS.get(ch) for ch in text]
-        if any(translated):
+        text = _unshift(text)
+        translated = [BIG_OPERATORS.get(ch, BIG_DELIMITERS.get(ch)) for ch in text]
+        if any(cmd is not None for cmd in translated):
             return "".join(
-                cmd + " " if cmd else ch for cmd, ch in zip(translated, text)
+                ch if cmd is None else cmd + " " if cmd else ""
+                for cmd, ch in zip(translated, text)
             ).strip()
-    return _to_math(text)
+    return _to_math(_styled(text, span))
 
 
 def _reconstruct_line(spans: list[dict]) -> str:
@@ -311,15 +362,25 @@ def _reconstruct_line(spans: list[dict]) -> str:
     en "e⁻ˣ²" la x y el 2 están en cuerpos distintos, así que el resultado es
     e^{-x^{2}} y no e^{-}^{x}^{2}.
     """
+    if any(_accent_of(span) for span in spans):
+        spans = sorted(_attach_accents(spans), key=lambda s: s["bbox"][0])
     base_size, base_y = _line_baseline(spans)
     pieces: list[str] = []
-    open_scripts: list[float] = []          # tamaños de los índices abiertos
+    open_scripts: list[tuple[float, str]] = []      # (tamaño, sup/sub) abiertos
     previous_right: Optional[float] = None
     previous_was_operator = False
 
-    def close_to(size: Optional[float]) -> None:
-        """Cierra los índices más pequeños que el tamaño indicado."""
-        while open_scripts and (size is None or open_scripts[-1] < size):
+    def close_to(size: Optional[float], kind: Optional[str] = None) -> None:
+        """
+        Cierra los índices más pequeños que el tamaño indicado, y el del mismo
+        tamaño si es del otro tipo: en p_{1,0}^{X} el 1,0 y la X van a la
+        misma altura de letra, pero uno abajo y otro arriba.
+        """
+        while open_scripts and (
+            size is None
+            or open_scripts[-1][0] < size
+            or (open_scripts[-1][0] == size and open_scripts[-1][1] != kind)
+        ):
             open_scripts.pop()
             pieces.append("}")
 
@@ -351,11 +412,11 @@ def _reconstruct_line(spans: list[dict]) -> str:
                 pieces.append("\\;")
             append(_span_text(span))
         else:
-            close_to(size)
-            if not open_scripts or open_scripts[-1] > size:
+            close_to(size, kind)
+            if not open_scripts or open_scripts[-1][0] > size:
                 pieces.append(("^" if kind == "sup" else "_") + "{")
-                open_scripts.append(size)
-            append(_script_body(text))
+                open_scripts.append((size, kind))
+            append(span["latex"] if "latex" in span else _script_body(_styled(text, span)))
 
         previous_right = span["bbox"][2]
         previous_was_operator = bool(
@@ -442,7 +503,7 @@ def collect_display_equations(page) -> list[DisplayEquation]:
                 group = []
                 continue
 
-            latex = _reconstruct_line(spans)
+            latex = _reconstruct_line(sorted(spans, key=lambda s: s["bbox"][0]))
             if latex:
                 caja = _union([tuple(s["bbox"]) for s in spans])
                 group.append((spans[0]["origin"][1], latex, math_chars / total, caja))
@@ -764,10 +825,308 @@ def cluster_equations(
             # La fracción puede sobresalir por arriba o por abajo del recorte.
             rect = _union([rect] + [r.rect for r in dentro])
             rect = (rect[0] - 4, rect[1] - 3, rect[2] + 4, rect[3] + 3)
+        # Al crecer para abarcar sus fracciones, un racimo puede pisar al
+        # siguiente (ecuaciones apiladas una debajo de otra): entonces son la
+        # misma y se juntan, o su contenido saldría repetido.
+        if racimos and _intersecta(racimos[-1].rect, rect):
+            anterior = racimos[-1]
+            racimos[-1] = EquationCluster(
+                rect=_union([anterior.rect, rect]),
+                members=anterior.members + grupo,
+                has_fraction=anterior.has_fraction or bool(dentro),
+            )
+            continue
         racimos.append(EquationCluster(
             rect=rect, members=grupo, has_fraction=bool(dentro),
         ))
     return racimos
+
+
+# ────────────────────────────────────────────────────────────
+# Reconstrucción de una ecuación apilada por geometría
+# ────────────────────────────────────────────────────────────
+
+_UNICODE_BIG_OPERATORS = {"∑": "\\sum", "∏": "\\prod", "∐": "\\coprod",
+                          "⋃": "\\bigcup", "⋂": "\\bigcap"}
+# Funciones que en una ecuación destacada llevan el límite debajo: lím, máx…
+_LIMIT_WORDS = {"lim", "liminf", "limsup", "max", "min", "sup", "inf"}
+
+
+def _center(caja: tuple) -> tuple[float, float]:
+    return (caja[0] + caja[2]) / 2, (caja[1] + caja[3]) / 2
+
+
+def _piece(latex: str, partes: list[dict], eje: float, size: float) -> dict:
+    """
+    Un trozo ya armado (una fracción, un sumatorio con sus límites) que se
+    coloca en la línea como si fuera un fragmento más. Su línea base se pone
+    un cuarto de cuerpo por debajo del eje matemático, que es donde la tiene
+    el resto de la ecuación.
+    """
+    caja = _union([tuple(p["bbox"]) for p in partes])
+    return {
+        "text": "x", "latex": latex, "bbox": caja, "size": size,
+        "origin": (caja[0], eje + 0.25 * size), "font": "",
+    }
+
+
+def _layout(spans: list[dict]) -> str:
+    """LaTeX de un grupo de fragmentos que forman una sola línea."""
+    return _reconstruct_line(sorted(spans, key=lambda s: s["bbox"][0]))
+
+
+# Acentos que el PDF guarda como un glifo suelto encima de la letra.
+_ACCENTS = {
+    "ˆ": "\\hat", "^": "\\hat", "˜": "\\tilde", "~": "\\tilde",
+    "¯": "\\bar", "ˉ": "\\bar", "˙": "\\dot", "¨": "\\ddot",
+    "ˇ": "\\check", "˘": "\\breve", "→": "\\vec", "⃗": "\\vec",
+}
+_WIDE_ACCENTS = {"b": "\\widehat", "c": "\\widehat", "d": "\\widehat",
+                 "e": "\\widetilde", "f": "\\widetilde", "g": "\\widetilde"}
+
+
+def _accent_of(span: dict) -> Optional[str]:
+    text = span["text"].strip()
+    if "latex" in span or len(text) != 1:
+        return None
+    if EXTENSION_FONT_RE.search(span.get("font", "")):
+        return _WIDE_ACCENTS.get(text)
+    return _ACCENTS.get(text)
+
+
+def _attach_accents(items: list[dict]) -> list[dict]:
+    """X con un ˆ suelto encima → \\hat{X}."""
+    for acento in [it for it in items if _accent_of(it)]:
+        comando = _accent_of(acento)
+        ax, ay = _center(acento["bbox"])
+        debajo = [
+            it for it in items
+            if it is not acento and "latex" not in it
+            and it["bbox"][0] - 1 <= ax <= it["bbox"][2] + 1
+            and _center(it["bbox"])[1] > ay
+            and it["bbox"][1] - acento["bbox"][3] < 0.5 * it["size"]
+        ]
+        if not debajo:
+            continue
+        base = min(debajo, key=lambda it: _center(it["bbox"])[1] - ay)
+        text = base["text"].strip()
+        if not text:
+            continue
+        # Si el fragmento tiene varias letras, el acento va sobre la que tiene
+        # justo debajo; se calcula por la posición, a partes iguales.
+        x0, x1 = base["bbox"][0], base["bbox"][2]
+        ancho = (x1 - x0) / len(text) or 1.0
+        i = min(len(text) - 1, max(0, int((ax - x0) / ancho)))
+        trozos = []
+        for desde, hasta in ((0, i), (i + 1, len(text))):
+            if desde < hasta:
+                trozo = dict(base)
+                trozo["text"] = text[desde:hasta]
+                trozo["bbox"] = (x0 + desde * ancho, base["bbox"][1], x0 + hasta * ancho, base["bbox"][3])
+                trozos.append(trozo)
+        letra = dict(base)
+        letra["text"] = text[i]
+        letra["latex"] = comando + "{" + _span_text(letra) + "}"
+        letra["bbox"] = (x0 + i * ancho, base["bbox"][1], x0 + (i + 1) * ancho, base["bbox"][3])
+        items = [it for it in items if it is not acento and it is not base] + trozos + [letra]
+    return items
+
+
+def _stack_fractions(items: list[dict], bars: list[tuple]) -> list[dict]:
+    """
+    Cambia cada fracción por una pieza \\frac{…}{…}. Se empieza por las rayas
+    más cortas, que son las de dentro: así una fracción dentro de otra ya está
+    armada cuando se llega a la de fuera.
+    """
+    for x0, y0, x1, y1 in sorted(bars, key=lambda b: b[2] - b[0]):
+        eje = (y0 + y1) / 2
+
+        def lado(arriba: bool) -> list[dict]:
+            cerca = []
+            for it in items:
+                caja = it["bbox"]
+                if caja[0] < x0 - 3 or caja[2] > x1 + 3:
+                    continue
+                hueco = eje - caja[3] if arriba else caja[1] - eje
+                if -1.0 <= hueco < 1.6 * it["size"]:
+                    cerca.append(it)
+            return cerca
+
+        num, den = lado(True), lado(False)
+        if not num or not den:
+            continue            # el trazo de una raíz, un subrayado…
+        size = max(it["size"] for it in num + den)
+        latex = "\\frac{" + _layout(num) + "}{" + _layout(den) + "}"
+        usados = {id(it) for it in num + den}
+        items = [it for it in items if id(it) not in usados]
+        items.append(_piece(latex, num + den, eje, size))
+    return items
+
+
+def _attach_limits(items: list[dict]) -> list[dict]:
+    """∑ con un índice debajo y otro encima → \\sum_{abajo}^{arriba}."""
+    operadores: list[tuple[dict, str, bool]] = []
+    for op in items:
+        if "latex" in op:
+            continue
+        text = op["text"].strip()
+        extension = EXTENSION_FONT_RE.search(op.get("font", ""))
+        command = (
+            (BIG_OPERATORS.get(_unshift(text)) if extension else None)
+            or _UNICODE_BIG_OPERATORS.get(text)
+            or ("\\" + text if text in _LIMIT_WORDS else None)
+        )
+        # Una palabra con algo escrito debajo: «minimize» sobre sus variables.
+        palabra = command is None and len(text) >= 3 and text.isalpha()
+        if palabra:
+            command = "\\text{" + text + "}"
+        if command and command not in ("\\int", "\\oint"):
+            # (las integrales llevan los límites a la derecha)
+            operadores.append((op, command, palabra))
+    if not operadores:
+        return items
+
+    # Cada trozo pequeño de debajo o de encima es límite del operador más
+    # cercano: en «min lím» cada uno se queda con el suyo.
+    limites: dict[int, tuple[list[dict], list[dict]]] = {id(op): ([], []) for op, _, _ in operadores}
+    for it in items:
+        cx, cy = _center(it["bbox"])
+        mejor = None
+        for op, _, _ in operadores:
+            caja = op["bbox"]
+            ancho, alto = caja[2] - caja[0], caja[3] - caja[1]
+            # Los límites van en letra más pequeña. Se mira el centro: las
+            # cajas de las letras llevan aire de sobra y se solapan.
+            if it is op or it["size"] > op["size"] - 0.4:
+                continue
+            if caja[3] - 0.2 * alto < cy < caja[3] + 0.9 * alto:
+                lado, margen = 0, ancho
+            elif caja[1] - 0.9 * alto < cy < caja[1] + 0.2 * alto:
+                lado, margen = 1, 0.3 * ancho
+            else:
+                continue
+            if not caja[0] - margen <= cx <= caja[2] + margen:
+                continue
+            distancia = abs(cx - _center(caja)[0])
+            if mejor is None or distancia < mejor[0]:
+                mejor = (distancia, op, lado)
+        if mejor:
+            limites[id(mejor[1])][mejor[2]].append(it)
+
+    for op, command, palabra in operadores:
+        abajo, arriba = limites[id(op)]
+        caja = op["bbox"]
+        if not abajo and not arriba:
+            continue
+        if palabra:
+            if not abajo or arriba:
+                continue
+            latex = "\\underset{" + _layout(abajo) + "}{" + command + "}"
+        else:
+            latex = command
+            if abajo:
+                latex += "_{" + _layout(abajo) + "}"
+            if arriba:
+                latex += "^{" + _layout(arriba) + "}"
+        usados = {id(op)} | {id(it) for it in abajo + arriba}
+        resto = [it for it in items if id(it) not in usados]
+        size = max((it["size"] for it in resto), default=op["size"])
+        items = resto + [_piece(latex, [op, *abajo, *arriba], _center(caja)[1], size)]
+    return items
+
+
+def _rows(items: list[dict]) -> list[list[dict]]:
+    """
+    Reparte los fragmentos en renglones. Los de cuerpo normal marcan dónde
+    está cada renglón; los índices van con el renglón que les queda más cerca.
+    """
+    if not items:
+        return []
+    cuerpo, _ = _line_baseline(items)
+    normales = sorted(
+        (it for it in items if it["size"] >= cuerpo - 0.6),
+        key=lambda it: it["origin"][1],
+    )
+    bases: list[float] = []
+    for it in normales:
+        y = it["origin"][1]
+        if not bases or y - bases[-1] > 0.9 * cuerpo:
+            bases.append(y)
+    filas: list[list[dict]] = [[] for _ in bases]
+    for it in items:
+        y = it["origin"][1]
+        cerca = min(range(len(bases)), key=lambda i: abs(bases[i] - y))
+        filas[cerca].append(it)
+    return [f for f in filas if f]
+
+
+def expand_region(page, rect: tuple) -> tuple:
+    """
+    Amplía la región de una ecuación hacia los lados con los trozos de la misma
+    altura que tiene pegados. La detección se queda a veces con un pedazo (la
+    fracción y poco más) y el resto de la línea —el sumatorio, el signo igual—
+    se perdería. El hueco admitido es corto para no saltar a la otra columna.
+    """
+    renglones = _lines_with_spans(page)
+    centro_y = (rect[1] + rect[3]) / 2
+    while True:
+        creciendo = rect
+        for caja, spans in renglones:
+            _, cy = _center(caja)
+            if not rect[1] - 2 <= cy <= rect[3] + 2 or _dentro(caja, rect, 1.0):
+                continue
+            if not caja[1] <= centro_y <= caja[3] and not _intersecta(caja, rect):
+                continue
+            hueco = max(caja[0] - rect[2], rect[0] - caja[2], 0.0)
+            size = max(s["size"] for s in spans)
+            total, math_chars = _math_ratio(spans)
+            if hueco < 1.2 * size and (total == 0 or math_chars / total >= 0.5):
+                rect = _union([rect, caja])
+        if rect == creciendo:
+            return rect
+
+
+_EQUATION_NUMBER = re.compile(r"^\(\d{1,3}[a-z]?\)$")
+
+
+def reconstruct_region(page, rect: tuple) -> Optional[str]:
+    """
+    LaTeX de una ecuación destacada leyendo toda su región a la vez: las
+    fracciones se arman con su raya y los sumatorios con sus límites, en vez
+    de leer renglón a renglón, que deja el numerador y el denominador uno
+    detrás del otro.
+    """
+    items = [
+        dict(span)
+        for _, spans in _lines_with_spans(page)
+        for span in spans
+        if _dentro(tuple(span["bbox"]), rect, 2.0)
+    ]
+    # El número de la ecuación, «(5)» suelto a la derecha, no es parte de ella.
+    derecha = max((it["bbox"][2] for it in items if not _EQUATION_NUMBER.match(it["text"].strip())),
+                  default=0.0)
+    items = [
+        it for it in items
+        if not (_EQUATION_NUMBER.match(it["text"].strip()) and it["bbox"][0] > derecha + 5)
+    ]
+    if not items:
+        return None
+    for it in items:
+        # Los glifos grandes (∑, paréntesis que abarcan una fracción) tienen
+        # el origen arriba del todo: se recoloca en el eje, como el resto.
+        if EXTENSION_FONT_RE.search(it.get("font", "")):
+            it["origin"] = (it["bbox"][0], _center(it["bbox"])[1] + 0.25 * it["size"])
+    bars = [b for b in _fraction_bars(page) if _dentro(b, rect, 2.0)]
+    items = _attach_accents(items)
+    items = _stack_fractions(items, bars)
+    items = _attach_limits(items)
+    filas = [_layout(fila) for fila in _rows(items)]
+    filas = [f for f in filas if f]
+    if not filas:
+        return None
+    if len(filas) == 1:
+        return filas[0]
+    return "\\begin{aligned} " + " \\\\ ".join(filas) + " \\end{aligned}"
 
 
 def region_plain_text(page, rect) -> str:

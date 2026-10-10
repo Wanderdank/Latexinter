@@ -49,3 +49,13 @@ def test_acentos_combinados_dentro_de_una_formula():
 
 def test_griegas_y_simbolos_poco_comunes():
     assert mathfix.latexify_tex("\U0001D703 y ∆ y ℓ") == r"$\theta$ y $\Delta$ y $\ell$"
+
+
+def test_comando_matematico_suelto_en_el_texto():
+    assert mathfix.latexify_tex(r"Sea \sigma y \(\alpha\)") == r"Sea $\sigma$ y \(\alpha\)"
+    # Un salto de línea seguido de una palabra no es un comando.
+    assert mathfix.latexify_tex("a \\\\" + "sigma") == "a \\\\" + "sigma"
+
+
+def test_indices_alternados():
+    assert mathfix.merge_double_scripts(r"\gamma_{1}^{s}_{,b}") == r"\gamma_{1,b}^{s}"

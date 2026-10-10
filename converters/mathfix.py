@@ -435,32 +435,38 @@ def merge_double_scripts(body: str) -> str:
             out.append(ch)
             i += 1
             continue
-        first, end = _script_argument(body, i + 1)
-        if first is None:
+        # Todos los índices seguidos que cuelgan de la misma base.
+        groups: list[tuple[str, str, int, int]] = []      # (marca, contenido, desde, hasta)
+        pos = i
+        while pos < len(body) and body[pos] in "^_":
+            arg, arg_end = _script_argument(body, pos + 1)
+            if arg is None:
+                break
+            groups.append((body[pos], arg, pos, arg_end))
+            pos = arg_end
+            while pos < len(body) and body[pos] in " \t" and body[pos + 1:pos + 2] in ("^", "_"):
+                pos += 1
+        if not groups:
             out.append(ch)
             i += 1
             continue
-        parts = [first]
-        following = end
-        while True:
-            while following < len(body) and body[following] in " \t":
-                following += 1
-            if following >= len(body) or body[following] != ch:
-                break
-            more, more_end = _script_argument(body, following + 1)
-            if more is None:
-                break
-            parts.append(more)
-            end = following = more_end
-        if len(parts) == 1:
-            braced = body[i + 1:end].lstrip().startswith("{")
-            out.append(ch + "{" + merge_double_scripts(first) + "}" if braced else body[i:end])
+        subs = [arg for mark, arg, _, _ in groups if mark == "_"]
+        sups = [arg for mark, arg, _, _ in groups if mark == "^"]
+        if len(subs) <= 1 and len(sups) <= 1:
+            # x^{b}_{a} se ve igual que x_{a}^{b}, que es como se suele escribir.
+            for mark, arg, start, stop in sorted(groups, key=lambda g: g[0] != "_"):
+                braced = body[start + 1:stop].lstrip().startswith("{")
+                out.append(mark + "{" + merge_double_scripts(arg) + "}" if braced else body[start:stop])
         else:
-            merged = parts[0]
-            for part in parts[1:]:
-                merged = join_math(merged, part)
-            out.append(ch + "{" + merge_double_scripts(merged) + "}")
-        i = end
+            # x_{1}^{s}_{,b} → x_{1,b}^{s}
+            for mark, parts in (("_", subs), ("^", sups)):
+                if not parts:
+                    continue
+                merged = parts[0]
+                for part in parts[1:]:
+                    merged = join_math(merged, part)
+                out.append(mark + "{" + merge_double_scripts(merged) + "}")
+        i = groups[-1][3]
     return "".join(out)
 
 
@@ -845,6 +851,16 @@ def _apply_combining(match: re.Match) -> str:
     return accent + (base if base.startswith("{") else "{" + base + "}")
 
 
+_STRAY_MATH_COMMAND = re.compile(
+    r"(?<![\\$])\\("
+    + "|".join(sorted(
+        {cmd[1:] for cmd in MATH_SYMBOLS.values() if re.fullmatch(r"\\[A-Za-z]+", cmd)},
+        key=len, reverse=True,
+    ))
+    + r")(?![A-Za-z])"
+)
+
+
 def latexify_tex(tex: str) -> str:
     """
     Sustituye los caracteres Unicode que pdflatex no sabe imprimir por sus
@@ -861,6 +877,10 @@ def latexify_tex(tex: str) -> str:
         ),
         tex,
     )
+
+    # Un comando de símbolo matemático que quedó fuera de la fórmula (\sigma
+    # suelto en un párrafo) para a pdflatex en seco: se mete en su $…$.
+    tex = _STRAY_MATH_COMMAND.sub(lambda m: "$" + m.group(0) + "$", tex)
 
     # Texto normal: primero los símbolos tipográficos…
     for ch, repl in TEXT_SYMBOLS.items():

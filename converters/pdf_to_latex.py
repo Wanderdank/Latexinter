@@ -369,7 +369,7 @@ def _ocr_display(page, equations, ocr, log, cache: dict) -> tuple[list, int]:
 
     for racimo in pdfmath.cluster_equations(page, equations, regiones):
         if not racimo.has_fraction:
-            resultado.append(_collapse(racimo))
+            resultado.append(_collapse(racimo, page))
             continue
 
         # 1) La ecuación entera de una vez.
@@ -391,7 +391,7 @@ def _ocr_display(page, equations, ocr, log, cache: dict) -> tuple[list, int]:
                 reconocidas += 1
 
         if not reconocidas:
-            resultado.append(_collapse(racimo))
+            resultado.append(_collapse(racimo, page))
             continue
 
         for miembro in racimo.members:
@@ -407,13 +407,13 @@ def _ocr_display(page, equations, ocr, log, cache: dict) -> tuple[list, int]:
             cuantas += reconocidas
             log(f"  ecuación apilada (mixta): {mezcla[:70]}")
         else:
-            resultado.append(_collapse(racimo))
+            resultado.append(_collapse(racimo, page))
 
     resultado.sort(key=lambda e: e.y)
     return resultado, cuantas
 
 
-def _collapse(racimo) -> "pdfmath.DisplayEquation":
+def _collapse(racimo, page=None) -> "pdfmath.DisplayEquation":
     """
     Deja el racimo en una sola ecuación.
 
@@ -423,6 +423,14 @@ def _collapse(racimo) -> "pdfmath.DisplayEquation":
     hay que sustituir.
     """
     miembros = racimo.members
+    if page is not None and (racimo.has_fraction or len(miembros) > 1):
+        # Leer renglón a renglón deja el numerador y el denominador de una
+        # fracción uno detrás del otro, y los límites de un sumatorio sueltos:
+        # se lee la región entera.
+        rect = pdfmath.expand_region(page, racimo.rect)
+        latex = pdfmath.reconstruct_region(page, rect)
+        if latex:
+            return _replace(miembros[0], latex=latex, rect=rect)
     if len(miembros) == 1:
         return miembros[0]
 
@@ -693,7 +701,7 @@ def pdf_to_latex(
                         # Sin OCR también hay que juntar los trozos: en el
                         # documento era una sola ecuación y una sola imagen.
                         equations = [
-                            _collapse(racimo)
+                            _collapse(racimo, page)
                             for racimo in pdfmath.cluster_equations(page, equations)
                         ]
                     if equations:
