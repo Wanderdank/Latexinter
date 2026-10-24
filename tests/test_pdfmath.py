@@ -39,6 +39,27 @@ def test_subindice_y_superindice_en_la_misma_letra():
     assert pdfmath._reconstruct_line(spans) == r"p_{1,0}^{X}"
 
 
+def test_indice_de_un_indice():
+    # ∫_{ℝⁿ}: la n está por debajo del renglón, pero encima de la ℝ.
+    spans = [
+        span("Z", 308.5, 462.3, 314.0, 472.3, 463.0, font="CMEX10"),
+        span("R", 314.0, 478.6, 319.1, 485.6, 485.6, size=7.0, font="MSBM7"),
+        span("n", 319.1, 479.7, 323.5, 484.7, 483.6, size=5.0, font="CMMI5"),
+        span("f", 324.5, 468.7, 331.0, 478.7, 476.5),
+        span("(", 332.1, 468.7, 336.0, 478.7, 476.5, font="CMR10"),
+        span("x", 336.0, 468.7, 341.6, 478.7, 476.5),
+        span(")", 341.6, 468.7, 345.5, 478.7, 476.5, font="CMR10"),
+    ]
+    assert pdfmath._reconstruct_line(spans) == r"\int_{\mathbb{R}^{n}}f(x)"
+    # Y al revés: e^{x_i}, con la i por encima del renglón pero bajo la x.
+    spans = [
+        span("e", 10, 92, 16, 102, 100),
+        span("x", 16, 88, 21, 95, 96, size=7.0),
+        span("i", 21, 91, 24, 97, 97.5, size=5.0, font="CMMI5"),
+    ]
+    assert pdfmath._reconstruct_line(spans) == r"e^{x_{i}}"
+
+
 def test_letras_de_pizarra_y_caligraficas():
     assert pdfmath._span_text(span("E", 0, 0, 5, 10, 8, font="MSBM10")) == r"\mathbb{E}"
     assert pdfmath._span_text(span("S", 0, 0, 5, 10, 8, font="CMSY10")) == r"\mathcal{S}"
@@ -60,6 +81,23 @@ def test_fraccion_sin_raya():
         span("g", 402, 199, 407, 209, 206),
     ]
     assert pdfmath._layout(pdfmath._virtual_fractions(items)) == r"R+\frac{1}{2}g"
+
+
+def test_fraccion_sin_raya_con_indices_que_asoman():
+    # E²/(c⁴M²_Pl): los índices de la M quedan a la derecha de la columna.
+    items = [
+        span("α", 439.9, 129.9, 448.4, 139.9, 137.4),
+        span("E", 457.3, 123.2, 464.7, 133.2, 130.7),
+        span("2", 465.2, 121.8, 469.2, 128.8, 127.1, size=7.0, font="CMR7"),
+        span("c", 449.6, 136.8, 453.9, 146.7, 144.2),
+        span("4", 454.0, 136.1, 457.9, 143.1, 141.4, size=7.0, font="CMR7"),
+        span("M", 458.4, 136.8, 468.1, 146.7, 144.2),
+        span("2", 469.2, 135.6, 473.2, 142.6, 140.9, size=7.0, font="CMR7"),
+        span("Pl", 468.1, 142.0, 476.8, 149.0, 147.2, size=7.0, font="CMMI7"),
+        span(".", 487.4, 129.9, 490.2, 139.9, 137.4),
+    ]
+    latex = pdfmath._layout(pdfmath._virtual_fractions(items))
+    assert latex.startswith(r"\alpha\frac{E^{2}}{c^{4}M_{\mathrm{Pl}}^{2}}")
 
 
 def test_raiz_con_su_raya():

@@ -197,7 +197,7 @@ def imprimir(resultados: list[dict], referencia: dict | None) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Mide la reconstrucción de fórmulas con papers de arXiv.")
     parser.add_argument("ids", nargs="*", help="IDs de arXiv (por defecto, los de bench/papers.txt)")
-    parser.add_argument("--ocr", action="store_true", help="usar el OCR de fórmulas (pix2tex)")
+    parser.add_argument("--ocr", action="store_true", help="usar el OCR de fórmulas (Pix2Text-MFR)")
     parser.add_argument("--reutilizar", action="store_true",
                         help="no volver a convertir los PDF ya convertidos")
     parser.add_argument("--referencia", action="store_true",

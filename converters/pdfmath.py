@@ -401,7 +401,7 @@ def _reconstruct_line(spans: list[dict]) -> str:
     spans = _normalize_extension(spans)
     base_size, base_y = _line_baseline(spans)
     pieces: list[str] = []
-    open_scripts: list[tuple[float, str]] = []      # (tamaño, sup/sub) abiertos
+    open_scripts: list[tuple[float, str, float]] = []   # (tamaño, sup/sub, línea base) abiertos
     previous_right: Optional[float] = None
 
     def close_to(size: Optional[float], kind: Optional[str] = None) -> None:
@@ -442,10 +442,19 @@ def _reconstruct_line(spans: list[dict]) -> str:
                 pieces.append("\\;")
             append(_span_text(span))
         else:
-            close_to(size, kind)
-            if not open_scripts or open_scripts[-1][0] > size:
-                pieces.append(("^" if kind == "sup" else "_") + "{")
-                open_scripts.append((size, kind))
+            # Un índice de un índice va arriba o abajo respecto de aquel del
+            # que cuelga, no del renglón: en ∫_{ℝⁿ} la n está por debajo del
+            # renglón, pero encima de la ℝ.
+            padre = next((s for s in reversed(open_scripts) if s[0] > size), None)
+            if padre is not None:
+                kind = _script_kind(span, padre[0], padre[2])
+            if kind is None:
+                close_to(padre[0], padre[1])    # a la altura del índice padre
+            else:
+                close_to(size, kind)
+                if not open_scripts or open_scripts[-1][0] > size:
+                    pieces.append(("^" if kind == "sup" else "_") + "{")
+                    open_scripts.append((size, kind, span["origin"][1]))
             append(span["latex"] if "latex" in span else _script_body(_styled(text, span)))
 
         previous_right = span["bbox"][2]
@@ -618,13 +627,31 @@ def _fraction_bars(page) -> list[tuple[float, float, float, float]]:
     return barras
 
 
+def _from_raw(span: dict) -> dict:
+    """
+    Un fragmento de rawdict con su texto. Si empieza por un espacio, la línea
+    base y la altura son las del espacio, que hereda las del glifo de antes:
+    en ∫_{ℝⁿ} f(x) la f quedaría a la altura del índice n. Se toman las del
+    primer glifo de verdad; la x se deja, que es la que marca los huecos.
+    """
+    chars = span.pop("chars", [])
+    span["text"] = "".join(c["c"] for c in chars)
+    glifos = [c for c in chars if c["c"].strip()]
+    if glifos and glifos[0] is not chars[0]:
+        span["origin"] = (span["origin"][0], glifos[0]["origin"][1])
+        y0 = min(c["bbox"][1] for c in glifos)
+        y1 = max(c["bbox"][3] for c in glifos)
+        span["bbox"] = (span["bbox"][0], y0, span["bbox"][2], y1)
+    return span
+
+
 def _lines_with_spans(page) -> list[tuple[tuple, list[dict]]]:
     resultado: list[tuple[tuple, list[dict]]] = []
-    for block in page.get_text("dict").get("blocks", []):
+    for block in page.get_text("rawdict").get("blocks", []):
         if block.get("type") != 0:
             continue
         for line in block.get("lines", []):
-            spans = [s for s in line.get("spans", []) if s["text"].strip()]
+            spans = [s for s in map(_from_raw, line.get("spans", [])) if s["text"].strip()]
             if spans:
                 resultado.append((_union([tuple(s["bbox"]) for s in spans]), spans))
     return resultado
@@ -1221,12 +1248,25 @@ def _virtual_fractions(items: list[dict]) -> list[dict]:
                 if any(id(it) not in presentes for it in num + den):
                     continue
                 # Los índices del numerador y del denominador van con ellos.
+                # Los del último glifo (la M de c²M²_Pl) pueden asomar por la
+                # derecha de la columna: van con el lado al que están pegados.
                 metidos = {id(it) for it in num + den}
+                lados = [(lado, max(s["bbox"][2] for s in lado), sorted(s["origin"][1] for s in lado)[len(lado) // 2])
+                         for lado in (num, den)]
                 for it in items:
                     if id(it) in metidos or it["size"] >= size - 0.6:
                         continue
                     cx = _center(it["bbox"])[0]
                     if not x0 - 1 <= cx <= x1 + 1:
+                        pegado = [
+                            lado for lado, fin, linea in lados
+                            if fin - 1 <= it["bbox"][0] <= fin + 0.3 * size
+                            and abs(it["origin"][1] - linea) < 0.6 * size
+                        ]
+                        if pegado and pegado[0] is lados[0][0]:
+                            num = num + [it]
+                        elif pegado:
+                            den = den + [it]
                         continue
                     dy = it["origin"][1] - base
                     if -1.6 * size < dy < -0.1 * size:
