@@ -106,7 +106,9 @@ MATH_SYMBOLS: dict[str, str] = {
     "\u2260": "\\neq", "\u2264": "\\leq", "\u2265": "\\geq", "\u2266": "\\leqq",
     "\u2267": "\\geqq", "\u226a": "\\ll", "\u226b": "\\gg",
     "\u2248": "\\approx", "\u2245": "\\cong", "\u2261": "\\equiv", "\u223c": "\\sim",
-    "\u2243": "\\simeq", "\u221d": "\\propto", "\u2225": "\\parallel", "\u22a5": "\\perp",
+    # \u2225: el PDF da este mismo car\u00e1cter para la doble barra de una norma, que es
+    # lo m\u00e1s frecuente; \parallel es una relaci\u00f3n y separa de m\u00e1s.
+    "\u2243": "\\simeq", "\u221d": "\\propto", "\u2225": "\\|", "\u22a5": "\\perp",
     "\u2254": ":=", "\u225c": "\\triangleq", "\u2250": "\\doteq",
     "\u2272": "\\lesssim", "\u2273": "\\gtrsim", "\u227a": "\\prec", "\u227b": "\\succ",
     "\u227c": "\\preccurlyeq", "\u227d": "\\succcurlyeq", "\u2aaf": "\\preceq",

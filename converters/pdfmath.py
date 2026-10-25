@@ -161,6 +161,8 @@ def _math_ratio(spans: list[dict]) -> tuple[int, int]:
 def _to_math(text: str) -> str:
     """Traduce un fragmento suelto a notación matemática LaTeX."""
     out: list[str] = []
+    # Los selectores de variante (newtx escribe «∑︁») no pintan nada.
+    text = _VARIATION_SELECTORS.sub("", text)
     for i, ch in enumerate(text):
         if ch.isascii():
             out.append(ch)
@@ -290,6 +292,106 @@ def apply_fixes_to_text(text: str, fixes: list[MathFix]) -> tuple[str, int]:
     return text, applied
 
 
+def _false_superscript_runs(page) -> list[list[tuple[str, bool]]]:
+    """
+    Tramos de texto que el extractor marca como superíndice sin serlo. Detrás
+    de un ∑ en el texto, cuyo glifo tiene la línea base muy arriba, PyMuPDF
+    marca como superíndice el resto del renglón, y el Markdown sale como
+    «[=][0,][and][we][will]». Un superíndice de verdad va más pequeño o más
+    alto que el texto de su renglón: si hay texto sin marcar del mismo cuerpo
+    sobre la misma línea base, no lo es.
+    Cada tramo es una lista de (texto, va separado del anterior).
+    """
+    bloques = [b for b in page.get_text("dict").get("blocks", []) if b.get("type") == 0]
+    lineas = [line for b in bloques for line in b.get("lines", [])]
+    # (cuerpo, línea base) del texto sin marcar. Se mira toda la página: el
+    # resto del renglón puede acabar en otro bloque.
+    normales = [
+        (s["size"], s["origin"][1])
+        for line in lineas for s in line.get("spans", [])
+        if not s["flags"] & 1 and s["text"].strip()
+    ]
+
+    def falso(s: dict) -> bool:
+        return bool(s["flags"] & 1) and not EXTENSION_FONT_RE.search(s.get("font", "")) and any(
+            abs(size - s["size"]) < 0.4 and abs(y - s["origin"][1]) < 0.12 * size
+            for size, y in normales
+        )
+
+    tramos: list[list[tuple[str, bool]]] = []
+    for line in lineas:
+        tramo: list[tuple[str, bool]] = []
+        hueco = False
+        derecha = None
+        for s in line.get("spans", []):
+            texto = s["text"].strip()
+            if not texto:
+                hueco = True
+                continue
+            # Separadas por un espacio o por un hueco sin espacio.
+            separado = hueco or s["text"][0].isspace() or (
+                derecha is not None and s["bbox"][0] - derecha > 0.15 * s["size"]
+            )
+            if falso(s):
+                tramo.append((texto, separado))
+            elif tramo:
+                tramos.append(tramo)
+                tramo = []
+            hueco = s["text"][-1].isspace()
+            derecha = s["bbox"][2]
+        if tramo:
+            tramos.append(tramo)
+    # Un corchete suelto de una sola letra podría ser un superíndice de
+    # verdad que casualmente cuadra; solo se tocan los tramos con sustancia.
+    return [t for t in tramos if len(t) >= 2 or len(t[0][0]) >= 3]
+
+
+_ENTRE_CORCHETES = re.compile(r"([_*]*)\s*([_*]*)")
+
+
+def unmark_false_superscripts(page, text: str) -> tuple[str, int]:
+    """Quita los corchetes de superíndice que el extractor puso de más."""
+    quitados = 0
+    tramos = _false_superscript_runs(page)
+    # El extractor no siempre escribe los trozos en el orden del PDF (un
+    # acento suelto se cuela entre dos): si el tramo entero no aparece, se
+    # prueba con sus trozos largos uno a uno.
+    sueltos = [[pieza] for tramo in tramos if len(tramo) > 1 for pieza in tramo if len(pieza[0]) >= 3]
+    for tramo in tramos + sueltos:
+        partes = []
+        for i, (texto, _) in enumerate(tramo):
+            if i:
+                partes.append(r"([\s_*]*)")
+            partes.append(r"\[\s*" + re.escape(texto) + r"\s*\]")
+        patron = "".join(partes)
+
+        def quitar(m: re.Match, tramo=tramo) -> str:
+            salida = tramo[0][0]
+            for i, (texto, separado) in enumerate(tramo[1:], start=1):
+                # Entre dos corchetes puede cerrarse una cursiva y abrirse
+                # otra. Sin los corchetes, la que cierra tiene que ir pegada
+                # a lo de antes y la que abre a lo de después, con un espacio
+                # en medio: «_x_y» no cierra la cursiva.
+                cierra, abre = _ENTRE_CORCHETES.fullmatch(m.group(i)).groups()
+                entre = cierra + " " + abre if cierra or abre or separado else ""
+                salida += entre + texto
+            return salida
+
+        m = re.search(patron, text)
+        if not m:
+            continue
+        salida = quitar(m)
+        # «Z[β]» seguido de «(ω)» sin corchetes sería un enlace de Markdown,
+        # y «[β]» seguido de «[x]», una referencia.
+        if salida[:1] in "([" and text[:m.start()].endswith("]"):
+            salida = " " + salida
+        if salida[-1:] == "]" and text[m.end():m.end() + 1] in ("(", "["):
+            salida += " "
+        text = text[:m.start()] + salida + text[m.end():]
+        quitados += 1
+    return text, quitados
+
+
 # ────────────────────────────────────────────────────────────
 # Ecuaciones destacadas
 # ────────────────────────────────────────────────────────────
@@ -371,13 +473,16 @@ def _normalize_extension(spans: list[dict]) -> list[dict]:
     normales = [s for s in spans if not EXTENSION_FONT_RE.search(s.get("font", ""))]
     if not normales:
         return spans
-    size, _ = _line_baseline(normales)
-    bases = sorted(s["origin"][1] for s in normales if abs(s["size"] - size) < 0.6)
+    cuerpo, _ = _line_baseline(normales)
     salida = []
     for span in spans:
         if "latex" in span or not EXTENSION_FONT_RE.search(span.get("font", "")):
             salida.append(span)
             continue
+        # El glifo va en el cuerpo del texto. En una fórmula corta con muchos
+        # índices («∏ₜ₌₁ᵀ p̂»), el cuerpo que más se repite es el de los índices.
+        size = span["size"] if any(abs(s["size"] - span["size"]) < 0.6 for s in normales) else cuerpo
+        bases = sorted(s["origin"][1] for s in normales if abs(s["size"] - size) < 0.6)
         arriba = min(span["origin"][1], span["bbox"][1])
         debajo = [b for b in bases if b > arriba]
         base = min(debajo) if debajo else (bases[-1] if bases else span["origin"][1])
@@ -813,6 +918,213 @@ def _tolerant_plain_pattern(piezas: list[str]) -> str:
 
 
 # ────────────────────────────────────────────────────────────
+# Sumatorios e integrales dentro de un párrafo
+# ────────────────────────────────────────────────────────────
+
+# Los selectores de variante que newtx pone detrás de su ∑ («∑︁»).
+_VARIATION_SELECTORS = re.compile("[︀-️]")
+# Lo que el extractor escribe en el Markdown en lugar del operador: el carácter
+# de reemplazo, el propio ∑ o nada.
+_OPERATOR_IN_MARKDOWN = r"(?:[^\s\[\]_*`$]{1,2})?"
+_PUNTUACION_FINAL = ",.;:"
+
+
+def _operator_command(span: dict) -> Optional[str]:
+    """\\sum, \\int… si el fragmento es un operador grande suelto."""
+    # Solo se quitan los espacios: los caracteres de control de delante son
+    # glifos de la fuente (las piezas de un paréntesis grande).
+    text = _VARIATION_SELECTORS.sub("", span["text"]).strip(" ")
+    if len(text) != 1:
+        return None
+    if EXTENSION_FONT_RE.search(span.get("font", "")):
+        return BIG_OPERATORS.get(_unshift(text)) or _UNICODE_BIG_OPERATORS.get(text) or (
+            "\\int" if text == "∫" else None
+        )
+    if _is_math_font(span):
+        return _UNICODE_BIG_OPERATORS.get(text) or ("\\int" if text == "∫" else None)
+    return None
+
+
+def _is_text_word(span: dict) -> bool:
+    """Una palabra del párrafo: letras en fuente de texto que no son «exp» ni «log»."""
+    if _is_math_font(span):
+        return False
+    palabras = re.findall(r"[A-Za-z]{2,}", span["text"])
+    return any(p not in mathfix.FUNCTIONS for p in palabras)
+
+
+def collect_inline_operators(page) -> list[MathFix]:
+    """
+    Las fórmulas con un ∑, ∏ o ∫ en medio de un párrafo.
+
+    El extractor no sabe qué hacer con el operador: lo deja como «�» (newtx
+    lo guarda en una fuente sin tabla de caracteres) o lo pierde, y sus
+    límites salen como letras sueltas. Aquí se parte del glifo del operador,
+    se recogen a los lados los fragmentos matemáticos de su renglón hasta dar
+    con el texto del párrafo, y se arma la fórmula con la misma geometría que
+    las ecuaciones destacadas.
+    """
+    renglones = _lines_with_spans(page)
+    todos = [(n, span) for n, (_, spans) in enumerate(renglones) for span in spans]
+    operadores = [(n, s) for n, s in todos if _operator_command(s)]
+    if not operadores:
+        return []
+    destacadas = [e.rect for e in collect_display_equations(page)]
+    bars = _fraction_bars(page)
+
+    fixes: list[MathFix] = []
+    usados: set[int] = set()
+    for _, op in operadores:
+        if id(op) in usados or any(_intersecta(tuple(op["bbox"]), r) for r in destacadas):
+            continue
+        size = op["size"]
+        # La línea base del renglón: la del texto que queda justo por debajo
+        # de lo alto del operador (el origen de su glifo está arriba del todo).
+        # Se mira lo que tiene cerca: en la otra columna los renglones no
+        # tienen por qué ir a la misma altura. En la fuente de extensión, lo
+        # alto del glifo es su origen; la caja que da newtx va un renglón
+        # más arriba.
+        if EXTENSION_FONT_RE.search(op.get("font", "")):
+            arriba = op["origin"][1]
+        else:
+            arriba = op["bbox"][1]
+        bases = [
+            (min(abs(s["bbox"][0] - op["bbox"][2]), abs(op["bbox"][0] - s["bbox"][2])), s["origin"][1])
+            for _, s in todos
+            if s is not op and abs(s["size"] - size) < 0.6 and not _operator_command(s)
+            and arriba + 0.2 * size < s["origin"][1] < arriba + 1.2 * size
+        ]
+        bases = [b for b in bases if b[0] < 6 * size]
+        if not bases:
+            continue
+        base = min(bases)[1]
+        en_renglon = sorted(
+            (s for _, s in todos
+             if s is op or (
+                 # Por arriba no llega a los subíndices del renglón anterior.
+                 base - 0.85 * size < _center(s["bbox"])[1] < base + 0.5 * size
+                 # Otro ∑ solo es del renglón si está a su misma altura.
+                 and (not _operator_command(s)
+                      or abs(s["origin"][1] - op["origin"][1]) < 0.3 * size))),
+            key=lambda s: s["bbox"][0],
+        )
+        i = next(k for k, s in enumerate(en_renglon) if s is op)
+
+        def extender(paso: int) -> tuple[list[dict], bool]:
+            """Fragmentos matemáticos pegados en esa dirección, y si se llega al texto."""
+            tomados: list[dict] = []
+            borde = op["bbox"][2] if paso > 0 else op["bbox"][0]
+            k = i + paso
+            while 0 <= k < len(en_renglon):
+                s = en_renglon[k]
+                hueco = s["bbox"][0] - borde if paso > 0 else borde - s["bbox"][2]
+                if hueco > 1.5 * size:
+                    return tomados, False
+                if _is_text_word(s):
+                    return tomados, True
+                tomados.append(s)
+                # Un punto o una coma seguidos del espacio entre palabras
+                # cierran la frase, y con ella la fórmula.
+                siguiente = en_renglon[k + 1] if 0 <= k + 1 < len(en_renglon) else None
+                if (paso > 0 and s["text"].strip()[-1:] in _PUNTUACION_FINAL
+                        and (siguiente is None or siguiente["bbox"][0] - s["bbox"][2] > 0.25 * size)):
+                    return tomados, True
+                borde = max(borde, s["bbox"][2]) if paso > 0 else min(borde, s["bbox"][0])
+                k += paso
+            return tomados, False
+
+        izquierda, texto_izq = extender(-1)
+        derecha, texto_der = extender(1)
+        # Fuera de un párrafo no hay texto al lado: es una ecuación destacada
+        # que la detección no cogió, y ahí la sustitución haría más mal que bien.
+        if not (texto_izq or texto_der) or not derecha:
+            continue
+        # La puntuación del final es de la frase, no de la fórmula.
+        while derecha and derecha[-1]["text"].strip() in _PUNTUACION_FINAL:
+            derecha.pop()
+        items = list(reversed(izquierda)) + [op] + derecha
+        if len(items) < 2:
+            continue
+        usados.update(id(s) for s in items)
+
+        # Puede que un fragmento termine en coma («0,»): esa coma se queda en
+        # el texto, fuera del $…$ y fuera del patrón.
+        ultimo = items[-1]
+        recortado = ultimo["text"].rstrip()
+        while len(recortado) > 1 and recortado[-1] in _PUNTUACION_FINAL:
+            recortado = recortado[:-1]
+        items[-1] = dict(ultimo, text=recortado)
+
+        rect = _union([tuple(s["bbox"]) for s in items])
+        piezas = [dict(s) for s in items]
+        piezas = _attach_accents(piezas)
+        piezas = _stack_fractions(piezas, [b for b in bars if _dentro(b, rect, 2.0)])
+        piezas = _normalize_extension(piezas)
+        piezas = _attach_limits(piezas)
+        latex = _layout(piezas)
+        if not latex or _operator_command(op) not in latex:
+            continue
+
+        # El patrón sigue el orden en que el extractor escribe los renglones;
+        # el operador puede salir de cualquier forma, o no salir.
+        # El extractor junta en un renglón lo que comparte altura (el ∑ y sus
+        # índices van en renglones distintos) y lo escribe de izquierda a
+        # derecha.
+        propios = {id(s) for s in items[:-1]} | {id(ultimo)}
+        orden = sorted(
+            ((n, s) for n, s in todos if id(s) in propios),
+            key=lambda par: par[1]["bbox"][0],
+        )
+        partes = [r"(?<![A-Za-z0-9])", _EMPHASIS]
+        plain = ""
+        primero = True
+        for _, s in orden:
+            if _operator_command(s):
+                partes.append(_BASURA + _OPERATOR_IN_MARKDOWN)
+                primero = False
+                continue
+            texto = (recortado if s is ultimo else s["text"]).strip()
+            for caracter in texto:
+                if caracter.isspace():
+                    continue
+                if not primero:
+                    partes.append(_BASURA)
+                partes.append(re.escape(caracter))
+                primero = False
+                plain += caracter
+        if len(plain) < 3:
+            continue
+        partes.append(_EMPHASIS)
+        fixes.append(MathFix(plain=plain, pattern="".join(partes), latex="$" + latex + "$"))
+    return fixes
+
+
+def apply_inline_operators(text: str, fixes: list[MathFix]) -> tuple[str, int]:
+    """
+    Mete en el Markdown las fórmulas de collect_inline_operators. Los
+    corchetes con que el extractor marca los índices pueden quedar a medias
+    a un lado de la fórmula («is[$∑…$»): se quitan con ella.
+    """
+    aplicadas = 0
+    for fix in fixes:
+        m = re.search(fix.pattern, text)
+        if not m:
+            continue
+        inicio, fin = m.span()
+        trozo = m.group(0)
+        abiertos = trozo.count("[") - trozo.count("]")
+        while abiertos > 0 and fin < len(text) and text[fin] == "]":
+            fin += 1
+            abiertos -= 1
+        while abiertos < 0 and inicio > 0 and text[inicio - 1] == "[":
+            inicio -= 1
+            abiertos += 1
+        text = text[:inicio] + fix.latex + text[fin:]
+        aplicadas += 1
+    return text, aplicadas
+
+
+# ────────────────────────────────────────────────────────────
 # Agrupación de ecuaciones para el OCR
 # ────────────────────────────────────────────────────────────
 
@@ -955,13 +1267,15 @@ def _attach_accents(items: list[dict]) -> list[dict]:
         ax, ay = _center(acento["bbox"])
         # La letra que tiene debajo. Algunos PDF dan a todos los glifos de un
         # renglón la misma caja de alto, así que basta con que no quede por
-        # encima del acento.
+        # encima del acento. Con newtx el acento sale de la fuente de texto,
+        # con la caja algo más baja que la de la letra en cursiva matemática.
+        holgura = max(1.0, 0.3 * acento["size"])
         debajo = [
             it for it in items
             if it is not acento and "latex" not in it and not _accent_of(it)
             and it["bbox"][0] - 1 <= ax <= it["bbox"][2] + 1
-            and _center(it["bbox"])[1] >= ay - 0.5
-            and it["bbox"][3] >= acento["bbox"][3] - 1
+            and _center(it["bbox"])[1] >= ay - holgura
+            and it["bbox"][3] >= acento["bbox"][3] - holgura
             and it["bbox"][1] - acento["bbox"][3] < 0.5 * it["size"]
         ]
         if not debajo:
@@ -1319,14 +1633,17 @@ def _attach_limits(items: list[dict]) -> list[dict]:
             if it is op or it["size"] > op["size"] - 0.4:
                 continue
             if caja[3] - 0.2 * alto < cy < caja[3] + 1.6 * alto:
-                lado, margen = 0, ancho
+                lado, margen, hueco = 0, ancho, max(0.0, cy - caja[3])
             elif caja[1] - 1.6 * alto < cy < caja[1] + 0.2 * alto:
-                lado, margen = 1, 0.3 * ancho
+                lado, margen, hueco = 1, 0.3 * ancho, max(0.0, caja[1] - cy)
             else:
                 continue
             if not caja[0] - margen <= cx <= caja[2] + margen:
                 continue
-            distancia = abs(cx - _center(caja)[0])
+            # También cuenta la distancia en vertical: en un aligned con un ∑
+            # en cada renglón, el límite de abajo de uno está casi tocando el
+            # de arriba del siguiente, y los dos ∑ están en la misma columna.
+            distancia = abs(cx - _center(caja)[0]) + hueco
             if mejor is None or distancia < mejor[0]:
                 mejor = (distancia, op, lado)
         if mejor:

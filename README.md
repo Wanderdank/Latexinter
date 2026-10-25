@@ -59,6 +59,9 @@ and the fonts to work out what was lost:
   nest them by size, so `e⁻ˣ²` becomes `e^{-x^{2}}`.
 - **Big operators:** TeX's math fonts store the integral sign in the slot of
   `Z` and the summation sign in the slot of `X`. Latexinter translates them back.
+  Inside a paragraph, the extractor usually drops the sign altogether and
+  scatters its limits, so Latexinter rebuilds the whole formula around it from
+  the glyphs on its line.
 - **Display equations:** pymupdf4llm's layout model marks where each one is,
   the same "find the region, then read it" approach as MinerU or PP-Structure.
   Latexinter reads each region as a whole. It finds the fraction bars among the

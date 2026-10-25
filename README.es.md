@@ -134,7 +134,9 @@ la tipografía para deducir lo que se perdió:
   `e^{-}^{x}^{2}`.
 - **Operadores grandes** — las fuentes matemáticas de TeX guardan la integral en
   la posición de la `Z` y el sumatorio en la de la `X`. Sin traducir esa
-  codificación, una integral se extrae del PDF como la letra Z.
+  codificación, una integral se extrae del PDF como la letra Z. Dentro de un
+  párrafo, el extractor suele perder el signo y desperdigar sus límites; por
+  eso Latexinter rehace la fórmula entera a partir de los glifos de su renglón.
 - **Ecuaciones destacadas** — el modelo de maquetación de pymupdf4llm marca
   dónde está cada una; es lo mismo que hacen MinerU o PP-Structure: primero
   localizar la región de la fórmula y luego leerla. Latexinter lee cada región

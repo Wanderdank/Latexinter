@@ -920,6 +920,9 @@ def pdf_to_latex(
             # fórmulas confunda «a, b = 0, 1» con matemáticas.
             if page_index is not None:
                 text = restore_code_blocks(text, doc[page_index], code_vault)
+                # Lo que el extractor marcó como superíndice sin serlo (el
+                # resto del renglón tras un ∑) saldría entre corchetes.
+                text, _ = pdfmath.unmark_false_superscripts(doc[page_index], text)
 
             if page_index is not None and math_reconstruction:
                 page = doc[page_index]
@@ -929,6 +932,13 @@ def pdf_to_latex(
                 if ocr is not None:
                     text, reconocidas = _ocr_fractions(page, text, ocr, log, ocr_cache)
                     ocr_count += reconocidas
+
+                # Los ∑ y ∫ del texto, antes que los índices sueltos: los
+                # límites del operador son índices sin letra de la que colgar.
+                text, applied = pdfmath.apply_inline_operators(
+                    text, pdfmath.collect_inline_operators(page)
+                )
+                math_fixes += applied
 
                 fixes = pdfmath.collect_math_fixes(page)
                 text, applied = pdfmath.apply_fixes_to_text(text, fixes)

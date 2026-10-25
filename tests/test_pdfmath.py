@@ -120,6 +120,25 @@ def test_limites_en_dos_renglones():
     assert pdfmath._layout(pdfmath._attach_limits(items)) == r"\inf_{\substack{t\in J \\ x\in \Omega}}"
 
 
+def test_limites_de_sumatorios_en_renglones_seguidos():
+    # En un aligned con un ∑ en cada renglón, el límite de abajo de uno casi
+    # toca el de arriba del siguiente, y los dos ∑ están en la misma columna.
+    items = [
+        span("v", 77.4, 324.5, 85.0, 334.4, 332.3),
+        span("N", 93.7, 314.4, 99.9, 321.4, 319.8, size=7.0, font="CMMI7"),
+        span("X", 88.8, 322.2, 103.2, 332.2, 322.8, font="CMEX10"),
+        span("m=1", 87.0, 338.5, 104.1, 345.4, 343.9, size=7.0, font="CMMI7"),
+        span("ν", 77.4, 359.3, 85.1, 369.3, 367.1),
+        span("N−2", 87.4, 349.2, 104.6, 356.2, 354.6, size=7.0, font="CMMI7"),
+        span("X", 88.8, 357.0, 103.2, 367.0, 357.6, font="CMEX10"),
+        span("m=1", 87.4, 373.3, 104.6, 380.3, 378.7, size=7.0, font="CMMI7"),
+    ]
+    piezas = pdfmath._attach_limits(pdfmath._normalize_extension(items))
+    assert sorted(p["latex"] for p in piezas if "latex" in p) == [
+        r"\sum_{m=1}^{N-2}", r"\sum_{m=1}^{N}",
+    ]
+
+
 def test_operador_de_la_fuente_de_extension_no_es_un_indice():
     # La fuente de extensión pone el origen del ∑ arriba del todo y el
     # extractor le da una caja diminuta.
@@ -159,3 +178,106 @@ def test_casos_con_llave():
     ]
     piezas = pdfmath._matrices(items)
     assert pdfmath._layout(piezas) == r"\begin{cases} 0, & x>0 \\ 1, & x\leq 0 \end{cases}"
+
+
+class PaginaFalsa:
+    """Lo justo de una página de PyMuPDF: el texto en dict/rawdict y sin dibujos."""
+
+    def __init__(self, renglones, flags=None):
+        self.renglones = renglones
+        self.flags = flags or {}
+
+        class Rect:
+            width = 612.0
+        self.rect = Rect()
+
+    def get_drawings(self):
+        return []
+
+    def get_text(self, modo):
+        lineas = []
+        for renglon in self.renglones:
+            spans = []
+            for s in renglon:
+                s = dict(s, flags=self.flags.get(id(s), 4))
+                if modo == "rawdict":
+                    ancho = (s["bbox"][2] - s["bbox"][0]) / max(1, len(s["text"]))
+                    s["chars"] = [
+                        {"c": c, "origin": (s["bbox"][0] + i * ancho, s["origin"][1]),
+                         "bbox": (s["bbox"][0] + i * ancho, s["bbox"][1],
+                                  s["bbox"][0] + (i + 1) * ancho, s["bbox"][3])}
+                        for i, c in enumerate(s["text"])
+                    ]
+                    del s["text"]
+                spans.append(s)
+            lineas.append({"spans": spans})
+        return {"blocks": [{"type": 0, "lines": lineas}]}
+
+
+def _renglon_con_sumatorio():
+    """«the global magnetization, [H, ∑_r S_r^z] = 0, and we will», de un paper real."""
+    resto = [
+        span("r", 210.0, 433.4, 213.7, 440.4, 438.6, size=7.0, font="CMMI7"),
+        span("]", 215.2, 428.7, 218.0, 438.6, 436.1, font="CMR10"),
+        span("=", 222.6, 428.7, 230.3, 438.6, 436.1, font="CMR10"),
+        span(" 0,", 230.3, 428.7, 242.7, 438.6, 436.1, font="CMR10"),
+        span(" and", 242.7, 428.7, 263.4, 438.6, 436.1, font="CMR10"),
+        span(" we", 263.4, 428.7, 279.2, 438.6, 436.1, font="CMR10"),
+        span(" will", 279.2, 428.7, 299.1, 438.6, 436.1, font="CMR10"),
+    ]
+    renglones = [
+        [
+            span("the global magnetization, ", 54.0, 428.7, 171.6, 438.6, 436.1, font="CMR10"),
+            span("[", 171.6, 428.7, 174.4, 438.6, 436.1, font="CMR10"),
+            span("H,", 174.4, 428.7, 185.7, 438.6, 436.1),
+            span("P", 187.3, 428.1, 197.8, 438.0, 428.7, font="CMEX10"),
+        ],
+        [
+            span("r", 197.8, 433.9, 201.5, 440.9, 439.1, size=7.0, font="CMMI7"),
+            span("S", 203.9, 428.7, 210.0, 438.6, 436.1),
+            span("z", 210.6, 427.3, 214.4, 434.3, 432.5, size=7.0, font="CMMI7"),
+        ],
+        resto,
+    ]
+    # PyMuPDF marca como superíndice todo lo que va detrás del ∑.
+    flags = {id(s): 5 for s in resto[1:]}
+    flags[id(renglones[0][3])] = 5
+    return PaginaFalsa(renglones, flags)
+
+
+MARKDOWN_SUMATORIO = (
+    "the global magnetization, [ _H,_[�] _r[S] r[z]_[]][=][0,][and][we][will] particularly"
+)
+
+
+def test_quita_los_superindices_de_mentira():
+    texto, cuantos = pdfmath.unmark_false_superscripts(_renglon_con_sumatorio(), MARKDOWN_SUMATORIO)
+    assert cuantos == 1
+    # La z, que sí es un índice, conserva sus corchetes.
+    assert texto == "the global magnetization, [ _H,_[�] _r[S] r[z]_] = 0, and we will particularly"
+
+
+def test_sumatorio_dentro_de_un_parrafo():
+    pagina = _renglon_con_sumatorio()
+    texto, _ = pdfmath.unmark_false_superscripts(pagina, MARKDOWN_SUMATORIO)
+    fixes = pdfmath.collect_inline_operators(pagina)
+    texto, cuantas = pdfmath.apply_inline_operators(texto, fixes)
+    assert cuantas == 1
+    assert texto == r"the global magnetization, $[H,\sum_{r}\;S_{r}^{z}]=0$, and we will particularly"
+
+
+def test_sin_corchetes_no_sale_un_enlace():
+    # «Z[β](ω)» sería un enlace de Markdown: pandoc lo convierte en \href.
+    renglon = [
+        span("where ", 10, 92, 40, 102, 100, font="CMR10"),
+        span("Z", 40, 92, 47, 102, 100),
+        span("β", 47, 88, 51, 95, 96, size=7.0, font="CMMI7"),
+        span("(", 52, 92, 55, 102, 100, font="CMR10"),
+        span("ω", 55, 92, 61, 102, 100),
+        span(")", 61, 92, 64, 102, 100, font="CMR10"),
+    ]
+    flags = {id(s): 5 for s in renglon[2:]}
+    texto, _ = pdfmath.unmark_false_superscripts(
+        PaginaFalsa([renglon], flags), "where 𝑍[𝛽][(][ω][)] is"
+    )
+    assert texto == "where 𝑍[𝛽] (ω) is"
