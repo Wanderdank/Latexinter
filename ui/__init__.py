@@ -6,7 +6,10 @@ ui - La interfaz de escritorio de Latexinter.
 
 Módulos:
     theme            colores, tipografías y hoja de estilos
-    latex_syntax     resaltado, comandos para autocompletar y fragmentos
+    icons            los iconos, dibujados con QPainter
+    widgets          controles pequeños compartidos
+    page_picker      elegir páginas de un PDF con miniaturas
+    latex_syntax    resaltado, comandos para autocompletar y fragmentos
     latex_editor     el editor de código
     pdf_view         el visor de PDF con zoom y SyncTeX
     panels           esquema, problemas, archivos y barra de búsqueda
@@ -84,7 +87,7 @@ def _instalar_avisador_de_errores() -> None:
 
 def run(argv: list[str] | None = None) -> int:
     """Arranca la aplicación. Devuelve el código de salida."""
-    from PyQt5.QtCore import Qt
+    from PyQt5.QtCore import QSettings, Qt
     from PyQt5.QtGui import QIcon
     from PyQt5.QtWidgets import QApplication
 
@@ -105,8 +108,8 @@ def run(argv: list[str] | None = None) -> int:
     app.setApplicationVersion(__version__)
     if ICONO.exists():
         app.setWindowIcon(QIcon(str(ICONO)))
-    app.setStyleSheet(theme.STYLESHEET)
     app.setFont(theme.ui_font(10))
+    theme.aplicar(QSettings(APP_NAME, APP_NAME).value("tema", theme.SISTEMA, type=str))
 
     _instalar_avisador_de_errores()
 

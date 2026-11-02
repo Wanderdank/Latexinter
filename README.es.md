@@ -47,7 +47,7 @@ python cli.py deps
 
 ## El editor
 
-Es la pestaña principal. A la izquierda el esquema y los archivos, en el centro
+Es la pantalla principal. A la izquierda el esquema y los archivos, en el centro
 el código y abajo los problemas; a la derecha, el PDF.
 
 **Escribir**
@@ -96,31 +96,44 @@ el código y abajo los problemas; a la derecha, el PDF.
 - `Ctrl+N` ofrece plantillas: artículo, informe, presentación (Beamer), tesis,
   carta, currículum y examen, todas con el preámbulo en español ya puesto.
 
-`F1` enseña la lista completa de atajos.
+`F1` enseña la lista completa de atajos. El tema claro u oscuro se elige en
+*Ver → Apariencia*, o sigue al del sistema.
 
 ## El conversor
 
-La segunda pestaña.
+La segunda pantalla: se cambia con el selector de arriba a la izquierda.
 
-![El conversor: un PDF convertido a LaTeX, con el código y el resultado compilado](docs/conversor.png)
+![El conversor: un PDF convertido a Word, junto al original](docs/conversor.png)
 
 | Desde | Hacia | Cómo |
 |-------|-------|------|
+| PDF   | Word  | Directo, de un paso: las fórmulas reconstruidas del PDF quedan como ecuaciones editables en Word |
 | PDF   | LaTeX | pymupdf4llm extrae la estructura, y Latexinter reconstruye las fórmulas leyendo la maquetación |
 | LaTeX | PDF   | pdflatex, con las pasadas necesarias para el índice y las referencias |
-| LaTeX | Word  | pandoc, con las ecuaciones editables en el editor de Word |
+| LaTeX | Word  | pandoc, con las ecuaciones editables en Word y una plantilla A4 sobria |
 | Word  | LaTeX | pandoc, con las imágenes y las ecuaciones OMML |
+| Word  | PDF   | Con Word o LibreOffice si los tienes; si no, pasando por LaTeX |
+
+**Varios a la vez.** Suelta varios documentos y se convierten uno detrás de
+otro. Si uno falla, los demás siguen; cada fila dice cómo le fue.
+
+**Páginas.** Escribe un rango (`1-5` o `1,3,8-10`) o pulsa *Elegir…* para
+marcarlas viendo sus miniaturas.
+
+**Cancelar.** Mata a pandoc y a pdflatex al instante, y el OCR para al acabar la
+fórmula que esté leyendo. La primera extracción del PDF no se puede interrumpir:
+la cancelación se aplica en cuanto termina.
 
 Por defecto el archivo generado se guarda junto al original; si ya existe uno
-con ese nombre, se numera (`documento_1.tex`) para no pisar tu trabajo. También
+con ese nombre, se numera (`documento_1.docx`) para no pisar tu trabajo. También
 se numera si ya hay un PDF con ese nombre, porque al compilar el `.tex` se
 sobrescribiría (convertir `articulo.pdf` da `articulo_1.tex`).
 
-**Vista previa.** Cuando el resultado es un `.tex` (desde Word o desde PDF), el
-conversor lo compila al terminar y lo enseña ahí mismo: el código LaTeX a la
-izquierda y el PDF a la derecha. Si no compila, el registro dice por qué, y
-**Abrir en el editor** lo lleva al editor con el PDF ya cargado para
-corregirlo. Se desactiva con la casilla *Compilar y enseñar el resultado*.
+**Comparar.** El original y el resultado se ven lado a lado y se desplazan a la
+vez. Un `.tex` se compila al terminar; si no compila, el registro dice por qué, y
+**Abrir en el editor** lo lleva al editor, que marca cada error en su línea. Un
+`.docx` se enseña exportándolo con Word o LibreOffice, si tienes alguno. Se
+desactiva en *Más opciones*, con la casilla *Enseñar el resultado al terminar*.
 
 ### Cómo se recuperan las fórmulas de un PDF
 
@@ -200,6 +213,10 @@ cópiala, y se inserta ya convertida a LaTeX en el punto donde esté el cursor.
 ## Línea de comandos
 
 ```bash
+python cli.py pdf2docx articulo.pdf --pages 1-6
+```
+
+```bash
 python cli.py pdf2tex articulo.pdf --pages 1-6
 ```
 
@@ -213,6 +230,16 @@ python cli.py tex2docx tesis.tex --toc
 
 ```bash
 python cli.py docx2tex informe.docx
+```
+
+```bash
+python cli.py docx2pdf informe.docx
+```
+
+Admite varios archivos de una vez:
+
+```bash
+python cli.py pdf2docx a.pdf b.pdf c.pdf
 ```
 
 Y desde PowerShell:
@@ -245,7 +272,10 @@ app.py                  lanzador
 cli.py                  línea de comandos
 build.ps1               envoltorio de PowerShell
 ui/
-    theme.py            colores, tipografías y hoja de estilos
+    theme.py            los dos temas: colores, tipografías y hoja de estilos
+    icons.py            los iconos, dibujados con QPainter
+    widgets.py          controles pequeños compartidos
+    page_picker.py      elegir páginas de un PDF con miniaturas
     latex_syntax.py     resaltado, comandos para autocompletar y fragmentos
     latex_editor.py     el editor de código
     pdf_view.py         visor de PDF con zoom, búsqueda y SyncTeX
@@ -267,11 +297,13 @@ converters/
     latex_to_pdf.py     LaTeX → PDF
     latex_to_docx.py    LaTeX → Word
     docx_to_latex.py    Word  → LaTeX
+    combined.py         PDF → Word y Word → PDF
+    office.py           exportar a PDF con Word o LibreOffice
 tests/                  pruebas (pytest)
 ejemplos/               .tex, .pdf y .docx para probar el conversor
 bench/                  medición de las fórmulas con papers de arXiv
 installer/              instalador de Windows (PyInstaller + Inno Setup)
-assets/                 ícono
+assets/                 ícono y plantilla de Word
 docs/                   capturas del README
 ```
 

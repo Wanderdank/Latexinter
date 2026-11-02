@@ -41,12 +41,21 @@ runs on your machine. There's no browser and nothing gets uploaded.
 
 | From  | To    | How |
 |-------|-------|-----|
+| PDF   | Word  | Directly, in one step: the formulas rebuilt from the PDF become equations you can edit in Word |
 | PDF   | LaTeX | pymupdf4llm extracts the structure, then Latexinter rebuilds the formulas from the page layout |
 | LaTeX | PDF   | pdflatex, with the passes needed for the table of contents and references |
-| LaTeX | Word  | pandoc, with equations you can edit in Word |
+| LaTeX | Word  | pandoc, with equations you can edit in Word and a clean A4 template |
 | Word  | LaTeX | pandoc, including images and OMML equations |
+| Word  | PDF   | Word or LibreOffice if you have them, otherwise through LaTeX |
 
-![Converter: a PDF turned into LaTeX, with the source and the compiled result side by side](docs/conversor.png)
+- **Batches:** drop several documents and convert them one after another. If one fails, the rest carry on.
+- **Compare:** the original and the result side by side, scrolling together. Word results are shown too, if Word or LibreOffice is installed.
+- **Choose pages** by typing a range or picking them from thumbnails.
+- Conversions can be cancelled, and they never overwrite a file you already have.
+
+![Converter: a PDF turned into Word, next to the original](docs/conversor.png)
+
+**Appearance:** light and dark themes, or follow the system (*Ver → Apariencia*).
 
 ## Recovering formulas from a PDF
 
@@ -128,10 +137,13 @@ Pix2Text-MFR model (120 MB) into `%LOCALAPPDATA%\Latexinter\modelos`.
 ## Command line
 
 ```bash
+python cli.py pdf2docx paper.pdf --pages 1-6
 python cli.py pdf2tex  paper.pdf --pages 1-6 --ocr
 python cli.py tex2pdf  thesis.tex --engine xelatex
 python cli.py tex2docx thesis.tex --toc
 python cli.py docx2tex report.docx
+python cli.py docx2pdf report.docx
+python cli.py pdf2docx a.pdf b.pdf c.pdf    # several files at once
 ```
 
 ## Measuring formula recovery

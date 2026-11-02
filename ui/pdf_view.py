@@ -32,6 +32,7 @@ from PyQt5.QtWidgets import (
 )
 
 from . import theme
+from .widgets import boton_icono
 
 NIVELES_ZOOM = [0.5, 0.65, 0.8, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
 
@@ -53,7 +54,7 @@ class _PageLabel(QLabel):
 
         self.setAlignment(Qt.AlignCenter)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.setStyleSheet(f"background: white; border: 1px solid {theme.BORDE};")
+        self.setObjectName("pagina")
 
     def aplicar_zoom(self, zoom: float) -> None:
         self.zoom = zoom
@@ -81,7 +82,7 @@ class _PageLabel(QLabel):
         painter.setRenderHint(QPainter.Antialiasing)
 
         if self.marcas:
-            color = QColor(theme.CIAN)
+            color = QColor(theme.COLOR_MARCA_PDF)
             color.setAlpha(70)
             painter.setPen(Qt.NoPen)
             painter.setBrush(color)
@@ -107,9 +108,11 @@ class PdfView(QWidget):
 
     syncRequested = pyqtSignal(int, float, float)   # página, x, y (puntos)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, compacta: bool = False, titulo: str = ""):
         super().__init__(parent)
         self.path: Optional[Path] = None
+        self.compacta = compacta            # para ver dos visores lado a lado
+        self.titulo = titulo
         self._doc = None
         self._paginas: list[_PageLabel] = []
         self._zoom = 1.0
@@ -117,14 +120,15 @@ class PdfView(QWidget):
 
         raiz = QVBoxLayout(self)
         raiz.setContentsMargins(0, 0, 0, 0)
-        raiz.setSpacing(6)
+        raiz.setSpacing(0)
         raiz.addWidget(self._build_toolbar())
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        self.scroll.setFrameStyle(0)
         self.contenedor = QWidget()
-        self.contenedor.setStyleSheet("background: #0b0c1a;")
+        self.contenedor.setObjectName("visor")
         self.columna = QVBoxLayout(self.contenedor)
         self.columna.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
         self.columna.setSpacing(14)
@@ -158,37 +162,29 @@ class PdfView(QWidget):
         barra = QFrame()
         barra.setObjectName("barra")
         fila = QHBoxLayout(barra)
-        fila.setContentsMargins(8, 5, 8, 5)
-        fila.setSpacing(6)
+        fila.setContentsMargins(8, 4, 8, 4)
+        fila.setSpacing(4)
 
-        def boton(texto: str, tooltip: str, accion) -> QPushButton:
-            b = QPushButton(texto)
-            b.setObjectName("plano")
-            b.setToolTip(tooltip)
-            b.setFixedWidth(30)
-            b.clicked.connect(accion)
-            return b
-
-        fila.addWidget(boton("−", "Alejar", lambda: self.zoom_step(-1)))
+        fila.addWidget(boton_icono("menos", "Alejar", lambda: self.zoom_step(-1)))
         self.selector_zoom = QComboBox()
         self.selector_zoom.setEditable(False)
-        self.selector_zoom.addItem("Ajustar al ancho", "ancho")
-        self.selector_zoom.addItem("Página completa", "pagina")
+        self.selector_zoom.addItem("Al ancho" if self.compacta else "Ajustar al ancho", "ancho")
+        self.selector_zoom.addItem("Página" if self.compacta else "Página completa", "pagina")
         for nivel in NIVELES_ZOOM:
             self.selector_zoom.addItem(f"{nivel * 100:.0f} %", nivel)
-        self.selector_zoom.setFixedWidth(150)
+        self.selector_zoom.setFixedWidth(100 if self.compacta else 150)
         self.selector_zoom.currentIndexChanged.connect(self._zoom_elegido)
         fila.addWidget(self.selector_zoom)
-        fila.addWidget(boton("+", "Acercar", lambda: self.zoom_step(1)))
+        fila.addWidget(boton_icono("mas", "Acercar", lambda: self.zoom_step(1)))
 
-        fila.addSpacing(10)
-        fila.addWidget(boton("▲", "Página anterior", lambda: self.step_page(-1)))
+        fila.addSpacing(6)
+        fila.addWidget(boton_icono("chevron_arriba", "Página anterior", lambda: self.step_page(-1)))
         self.etiqueta_pagina = QLabel("—")
         self.etiqueta_pagina.setObjectName("pista")
-        self.etiqueta_pagina.setMinimumWidth(70)
+        self.etiqueta_pagina.setMinimumWidth(56)
         self.etiqueta_pagina.setAlignment(Qt.AlignCenter)
         fila.addWidget(self.etiqueta_pagina)
-        fila.addWidget(boton("▼", "Página siguiente", lambda: self.step_page(1)))
+        fila.addWidget(boton_icono("chevron_abajo", "Página siguiente", lambda: self.step_page(1)))
 
         fila.addStretch(1)
 
@@ -199,7 +195,12 @@ class PdfView(QWidget):
         self.buscador.textChanged.connect(
             lambda t: self._limpiar_marcas() if not t else None
         )
+        self.buscador.setVisible(not self.compacta)
         fila.addWidget(self.buscador)
+        if self.titulo:
+            rotulo = QLabel(self.titulo)
+            rotulo.setObjectName("seccion")
+            fila.addWidget(rotulo)
 
         return barra
 
@@ -331,6 +332,12 @@ class PdfView(QWidget):
         super().resizeEvent(event)
         if self._ajustar_ancho and self._paginas:
             self._aplicar_zoom()
+            self._temporizador.start()
+
+    def showEvent(self, event) -> None:
+        # Lo cargado con el visor oculto (otra pestaña) aún no se ha dibujado.
+        super().showEvent(event)
+        if self._paginas:
             self._temporizador.start()
 
     # ════════════════════════════════════════════════════════

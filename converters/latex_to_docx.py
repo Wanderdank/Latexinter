@@ -1,17 +1,22 @@
 """
 latex_to_docx.py - Convierte un documento LaTeX a Word (.docx).
 
-Lo hace pandoc. Dos detalles importantes:
+Lo hace pandoc. Algunos detalles importantes:
 
   · --resource-path apunta a la carpeta del .tex, para que encuentre las
     imágenes de \\includegraphics y las incruste en el documento.
   · Las matemáticas se traducen a OMML, el formato nativo de Word, así que las
     fórmulas quedan editables con el editor de ecuaciones y no como imágenes.
+  · Los estilos salen de assets/word-plantilla.docx. Los de pandoc por defecto
+    (títulos azules, mucho aire) delatan una conversión automática.
 """
 
 from __future__ import annotations
 
+import os
 import re
+import tempfile
+import zipfile
 from pathlib import Path
 from typing import Optional
 
@@ -29,6 +34,10 @@ from .common import (
 )
 
 _BIBLIOGRAPHY = re.compile(r"\\(?:bibliography|addbibresource)\s*\{([^}]*)\}")
+_MATH_WARNING = "Could not convert TeX math"
+# Instalado, los módulos están en _internal/converters y los datos en
+# _internal/assets: la misma ruta relativa que en el proyecto.
+WORD_TEMPLATE = Path(__file__).resolve().parent.parent / "assets" / "word-plantilla.docx"
 
 
 def _find_bibliography(tex_path: Path, source: str) -> list[Path]:
@@ -45,6 +54,34 @@ def _find_bibliography(tex_path: Path, source: str) -> list[Path]:
             if candidate.exists():
                 found.append(candidate)
     return found
+
+
+def word_friendly_source(source: str) -> str:
+    """
+    Lo que pandoc no sabe leer de sus propios .tex: envuelve las imágenes en
+    \\pandocbounded, una macro que al leerla expande a un \\sbox, y la imagen
+    se pierde sin ningún aviso.
+    """
+    return source.replace("\\pandocbounded{", "{")
+
+
+def split_pandoc_warnings(stderr: str) -> tuple[int, list[str]]:
+    """Cuántas fórmulas no pudo traducir pandoc, y el resto de sus avisos."""
+    avisos = re.split(r"(?m)^(?=\[WARNING\])", stderr or "")
+    formulas = sum(1 for aviso in avisos if _MATH_WARNING in aviso)
+    otros = [aviso.strip() for aviso in avisos if aviso.strip() and _MATH_WARNING not in aviso]
+    return formulas, otros
+
+
+def count_word_content(docx: Path) -> dict[str, int]:
+    """Ecuaciones editables e imágenes que hay de verdad dentro de un .docx."""
+    with zipfile.ZipFile(docx) as paquete:
+        documento = paquete.read("word/document.xml").decode("utf-8", "replace")
+        imagenes = sum(1 for nombre in paquete.namelist() if nombre.startswith("word/media/"))
+    return {
+        "ecuaciones_word": len(re.findall(r"<m:oMath[ >]", documento)),
+        "imagenes": imagenes,
+    }
 
 
 def latex_to_docx(
@@ -69,12 +106,24 @@ def latex_to_docx(
     source = tex_path.read_text(encoding="utf-8", errors="replace")
 
     # El .docx se regenera a partir del .tex, así que se puede sobrescribir.
-    target = resolve_output(tex_path, ".docx", output, output_dir, overwrite=True)
+    # Nunca se pisa un .docx: pueden ser horas de retoques hechos en Word.
+    target = resolve_output(tex_path, ".docx", output, output_dir, overwrite=False)
     log(f"Entrada : {tex_path.name} ({human_size(tex_path)})")
     log(f"Salida  : {target}")
 
+    legible = word_friendly_source(source)
+    temporal: Optional[Path] = None
+    entrada = tex_path
+    if legible != source:
+        # Junto al original, porque las rutas de \input se resuelven desde ahí.
+        descriptor, nombre = tempfile.mkstemp(prefix=".latexinter-", suffix=".tex", dir=tex_path.parent)
+        os.close(descriptor)
+        temporal = Path(nombre)
+        temporal.write_text(legible, encoding="utf-8")
+        entrada = temporal
+
     cmd = [
-        "pandoc", str(tex_path),
+        "pandoc", str(entrada),
         "-o", str(target),
         "--from=latex+raw_tex",
         "--to=docx",
@@ -91,6 +140,8 @@ def latex_to_docx(
         if not reference.exists():
             raise ConversionError(f"No existe la plantilla de Word: {reference}")
         cmd.append(f"--reference-doc={reference}")
+    elif WORD_TEMPLATE.exists():
+        cmd.append(f"--reference-doc={WORD_TEMPLATE}")
 
     warnings: list[str] = []
     bibs = _find_bibliography(tex_path, source)
@@ -106,19 +157,31 @@ def latex_to_docx(
             "las citas saldrán como texto sin resolver."
         )
 
-    log("Convirtiendo con pandoc…")
-    result = run_command(cmd, cwd=tex_path.parent, logger=None, timeout=600)
+    log("Generando el documento de Word…")
+    try:
+        result = run_command(cmd, cwd=tex_path.parent, logger=None, timeout=600)
+    finally:
+        if temporal is not None:
+            temporal.unlink(missing_ok=True)
 
     if result.returncode != 0 or not target.exists():
         raise ConversionError(
             "pandoc no pudo generar el documento de Word:\n" + tail(result.stderr)
         )
-    if result.stderr.strip():
-        warnings.append(tail(result.stderr, 8))
 
+    formulas_sin_traducir, otros_avisos = split_pandoc_warnings(result.stderr)
+    if formulas_sin_traducir:
+        warnings.append(
+            f"{formulas_sin_traducir} "
+            + ("fórmula no se pudo convertir" if formulas_sin_traducir == 1
+               else "fórmulas no se pudieron convertir")
+            + " a ecuación de Word y "
+            + ("quedó" if formulas_sin_traducir == 1 else "quedaron")
+            + " como texto LaTeX."
+        )
+    if otros_avisos:
+        warnings.append(tail("\n".join(otros_avisos), 8))
+
+    stats = {"origen": tex_path.name, **count_word_content(target)}
     log(f"Listo: {target.name} ({human_size(target)})")
-    return ConversionResult(
-        output=target,
-        warnings=warnings,
-        stats={"origen": tex_path.name},
-    )
+    return ConversionResult(output=target, warnings=warnings, stats=stats)

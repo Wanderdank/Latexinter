@@ -24,19 +24,22 @@ from PyQt5.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
-    QTabWidget,
+    QPushButton,
+    QSizePolicy,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from converters import SUPPORTED_EXTENSIONS, dependency_report
+from converters import SUPPORTED_EXTENSIONS, dependency_report, office
 from converters.textfiles import RecoveryStore
 from converters.tools import synctex_available
 
-from . import theme
+from . import icons, theme
 from .converter_panel import ConverterPanel
 from .editor_page import EditorPage
 from .templates import TEMPLATES, TEMPLATES_POR_CLAVE
+from .widgets import Segmented
 
 APP_NAME = "Latexinter"
 ORGANIZACION = "Latexinter"
@@ -112,6 +115,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.settings = QSettings(ORGANIZACION, APP_NAME)
         self.scratch_dir = Path(scratch_dir)
+        self._ultimo_estado = "inactivo"
 
         self.setWindowTitle(APP_NAME)
         self.resize(1440, 900)
@@ -120,13 +124,13 @@ class MainWindow(QMainWindow):
 
         self.recuperacion = self._abrir_recuperacion()
 
-        self.paginas = QTabWidget()
+        self.paginas = QStackedWidget()
         self.editor_page = EditorPage(self.recuperacion)
         self.converter_page = ConverterPanel(self.scratch_dir)
         self.converter_page.documentReady.connect(self._abrir_desde_conversor)
 
-        self.paginas.addTab(self.editor_page, "  Editor  ")
-        self.paginas.addTab(self.converter_page, "  Conversor  ")
+        self.paginas.addWidget(self.editor_page)
+        self.paginas.addWidget(self.converter_page)
         self.paginas.currentChanged.connect(self._cambio_de_pagina)
         self.setCentralWidget(self.paginas)
 
@@ -151,6 +155,8 @@ class MainWindow(QMainWindow):
         if self.editor_page.documentos.count() == 0:
             self.editor_page.new_document()
         self._actualizar_titulo()
+        self._poner_iconos()
+        theme.avisador.cambiado.connect(self._poner_iconos)
         # Después de mostrarse la ventana, para que el aviso salga encima.
         QTimer.singleShot(0, self._ofrecer_recuperacion)
 
@@ -283,9 +289,21 @@ class MainWindow(QMainWindow):
         herramientas.addSeparator()
         herramientas.addAction(self.a_palabras)
         herramientas.addAction(self.a_chktex)
-        herramientas.addSeparator()
-        herramientas.addAction(self.a_ir_conversor)
-        herramientas.addAction(self.a_ir_editor)
+
+        ver = barra.addMenu("&Ver")
+        ver.addAction(self.a_ir_editor)
+        ver.addAction(self.a_ir_conversor)
+        ver.addSeparator()
+        menu_tema = ver.addMenu("Apariencia")
+        self.grupo_tema = QActionGroup(self)
+        self.grupo_tema.setExclusive(True)
+        elegido = self.settings.value("tema", theme.SISTEMA, type=str)
+        for clave, nombre in ((theme.SISTEMA, "Según el sistema"),
+                              (theme.CLARO, "Clara"), (theme.OSCURO, "Oscura")):
+            accion = self._accion(nombre, None, "", checkable=True, checked=clave == elegido)
+            accion.triggered.connect(lambda _, c=clave: self._elegir_tema(c))
+            self.grupo_tema.addAction(accion)
+            menu_tema.addAction(accion)
 
         ayuda = barra.addMenu("A&yuda")
         ayuda.addAction(self.a_atajos)
@@ -295,24 +313,40 @@ class MainWindow(QMainWindow):
         barra = self.addToolBar("Principal")
         barra.setMovable(False)
         barra.setIconSize(QSize(16, 16))
+        barra.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        barra.setContextMenuPolicy(Qt.PreventContextMenu)
+        self.barra = barra
 
-        barra.addAction(self.a_nuevo)
-        barra.addAction(self.a_abrir)
-        barra.addAction(self.a_guardar)
-        barra.addSeparator()
-        barra.addAction(self.a_compilar)
-        barra.addAction(self.a_auto)
-        barra.addAction(self.a_sync)
-        barra.addSeparator()
+        self.selector_pagina = Segmented()
+        self.selector_pagina.set_items([(0, "Editor"), (1, "Conversor")], 0)
+        self.selector_pagina.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
+        self.selector_pagina.changed.connect(self.paginas.setCurrentIndex)
+        barra.addWidget(self.selector_pagina)
 
+        # Lo que solo tiene sentido en el editor se esconde en el conversor.
+        separador = barra.addSeparator()
         self.selector_motor = QComboBox()
         self.selector_motor.addItems(["pdflatex", "xelatex", "lualatex"])
         self.selector_motor.setFixedWidth(110)
         self.selector_motor.currentTextChanged.connect(self._elegir_motor)
-        barra.addWidget(self.selector_motor)
 
-        barra.addSeparator()
+        barra.addAction(self.a_nuevo)
+        barra.addAction(self.a_abrir)
+        barra.addAction(self.a_guardar)
+        separador_compilar = barra.addSeparator()
+        barra.addAction(self.a_compilar)
+        barra.widgetForAction(self.a_compilar).setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        barra.addAction(self.a_detener)
+        barra.addAction(self.a_auto)
+        barra.addAction(self.a_sync)
+        motor = barra.addWidget(self.selector_motor)
+        separador_buscar = barra.addSeparator()
         barra.addAction(self.a_buscar)
+        self.solo_editor = [
+            separador, self.a_nuevo, self.a_abrir, self.a_guardar, separador_compilar,
+            self.a_compilar, self.a_detener, self.a_auto, self.a_sync, motor,
+            separador_buscar, self.a_buscar,
+        ]
 
         espaciador = QWidget()
         espaciador.setSizePolicy(
@@ -320,9 +354,27 @@ class MainWindow(QMainWindow):
         )
         barra.addWidget(espaciador)
 
-        self.indicador_dependencias = QLabel()
-        self.indicador_dependencias.setObjectName("estado")
-        barra.addWidget(self.indicador_dependencias)
+        # Solo aparece si falta algo: lo normal es que no haya nada que decir.
+        self.indicador_dependencias = QPushButton()
+        self.indicador_dependencias.setObjectName("plano")
+        self.indicador_dependencias.setIconSize(QSize(16, 16))
+        self.indicador_dependencias.setCursor(Qt.PointingHandCursor)
+        self.indicador_dependencias.clicked.connect(self._mostrar_dependencias)
+        self.a_indicador = barra.addWidget(self.indicador_dependencias)
+
+    def _poner_iconos(self) -> None:
+        for accion, nombre in (
+            (self.a_nuevo, "nuevo"), (self.a_abrir, "carpeta"), (self.a_guardar, "guardar"),
+            (self.a_compilar, "compilar"), (self.a_detener, "detener"),
+            (self.a_auto, "reloj"), (self.a_sync, "objetivo"), (self.a_buscar, "buscar"),
+        ):
+            accion.setIcon(icons.icono(nombre))
+        self.indicador_dependencias.setIcon(icons.icono("aviso", theme.AMBAR))
+        self._estado_compilacion(self._ultimo_estado)
+
+    def _elegir_tema(self, clave: str) -> None:
+        self.settings.setValue("tema", clave)
+        theme.aplicar(clave)
 
     def _build_statusbar(self) -> None:
         barra = self.statusBar()
@@ -439,7 +491,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self, APP_NAME,
                 f"<b>{propio}</b> palabras.<br><br>"
-                "<span style='color:#8b8bab'>Se han descartado el preámbulo, "
+                f"<span style='color:{theme.TEXTO_SUAVE}'>Se han descartado el preámbulo, "
                 "los comentarios, las fórmulas y el código.<br>"
                 "Para usar texcount (el contador de TeX) hace falta tener Perl "
                 "instalado.</span>",
@@ -459,40 +511,37 @@ class MainWindow(QMainWindow):
     def _comprobar_dependencias(self) -> None:
         estado = dependency_report()
         etiquetas = {"pandoc": "pandoc", "pdflatex": "LaTeX", "pymupdf4llm": "PyMuPDF"}
-        partes, faltan = [], []
-        for clave, nombre in etiquetas.items():
-            if estado.get(clave):
-                partes.append(f"✓ {nombre}")
-            else:
-                partes.append(f"✗ {nombre}")
-                faltan.append(nombre)
-        if not synctex_available():
-            partes.append("✗ SyncTeX")
-
-        self.indicador_dependencias.setText("   ".join(partes) + "   ")
-        color = theme.AMBAR if faltan else theme.VERDE
-        self.indicador_dependencias.setStyleSheet(f"color: {color}; padding-right: 8px;")
+        faltan = [nombre for clave, nombre in etiquetas.items() if not estado.get(clave)]
+        self.indicador_dependencias.setText("Falta " + ", ".join(faltan) if faltan else "")
+        self.indicador_dependencias.setToolTip("Ver qué hace falta y cómo instalarlo")
+        self.a_indicador.setVisible(bool(faltan))
         self.a_sync.setEnabled(synctex_available())
 
     def _mostrar_dependencias(self) -> None:
         estado = dependency_report()
+        oficina = office.office_name()
         filas = []
-        for clave, nombre in (
-            ("pandoc", "pandoc — conversiones con Word"),
-            ("pdflatex", "pdflatex — compilar LaTeX"),
-            ("bibtex", "bibtex — bibliografías"),
-            ("pymupdf4llm", "pymupdf4llm — leer PDF"),
-            ("fitz", "PyMuPDF — leer PDF"),
+        for presente, nombre, uso in (
+            (estado.get("pandoc"), "pandoc", "conversiones con Word"),
+            (estado.get("pdflatex"), "pdflatex", "compilar LaTeX"),
+            (estado.get("bibtex"), "bibtex", "bibliografías"),
+            (estado.get("pymupdf4llm") and estado.get("fitz"), "PyMuPDF", "leer PDF"),
+            (synctex_available(), "synctex", "saltar entre código y PDF"),
+            (oficina, oficina or "Word o LibreOffice", "ver y exportar documentos de Word (opcional)"),
         ):
-            ruta = estado.get(clave)
-            filas.append(f"{'✓' if ruta else '✗'} {nombre}")
-        filas.append(f"{'✓' if synctex_available() else '✗'} synctex — saltar entre código y PDF")
-        filas.append("")
-        filas.append("Si falta algo:")
-        filas.append("winget install --id JohnMacFarlane.Pandoc")
-        filas.append("winget install --id MiKTeX.MiKTeX")
-        filas.append("pip install -r requirements.txt")
-        QMessageBox.information(self, "Dependencias", "\n".join(filas))
+            color = theme.VERDE if presente else theme.AMBAR
+            filas.append(
+                f"<tr><td style='color:{color}'>{'Instalado' if presente else 'Falta'}</td>"
+                f"<td><b>{nombre}</b></td><td>{uso}</td></tr>"
+            )
+        QMessageBox.information(
+            self, "Dependencias",
+            f"<table cellspacing='6'>{''.join(filas)}</table><br>"
+            "Para instalar lo que falte:<br>"
+            "<code>winget install --id JohnMacFarlane.Pandoc</code><br>"
+            "<code>winget install --id MiKTeX.MiKTeX</code><br>"
+            "<code>pip install -r requirements.txt</code>",
+        )
 
     def _abrir_desde_conversor(self, path: Path) -> None:
         self.paginas.setCurrentIndex(0)
@@ -510,6 +559,7 @@ class MainWindow(QMainWindow):
         self.etiqueta_posicion.setText(f"Ln {linea}, Col {columna}")
 
     def _estado_compilacion(self, estado: str) -> None:
+        self._ultimo_estado = estado
         textos = {
             "compilando": ("Compilando…", theme.AMBAR),
             "ok": ("Compilado", theme.VERDE),
@@ -522,6 +572,10 @@ class MainWindow(QMainWindow):
         self.estado_compilacion.setStyleSheet(f"color: {color}; padding: 0 8px;")
         self.a_compilar.setEnabled(estado != "compilando")
         self.a_detener.setEnabled(estado == "compilando")
+        # Compilar y Detener ocupan el mismo sitio: solo se ve el que vale ahora.
+        if self.paginas.currentIndex() == 0:
+            self.a_compilar.setVisible(estado != "compilando")
+            self.a_detener.setVisible(estado == "compilando")
 
     def _actualizar_palabras(self) -> None:
         total = self.editor_page.quick_word_count()
@@ -538,12 +592,18 @@ class MainWindow(QMainWindow):
 
     def _cambio_de_pagina(self, indice: int) -> None:
         en_editor = indice == 0
+        self.selector_pagina.set_value(indice)
+        for accion in self.solo_editor:
+            accion.setVisible(en_editor)
+        for etiqueta in (self.etiqueta_palabras, self.etiqueta_posicion, self.estado_compilacion):
+            etiqueta.setVisible(en_editor)
         for accion in (self.a_guardar, self.a_guardar_como, self.a_cerrar,
                        self.a_compilar, self.a_auto, self.a_sync,
                        self.a_buscar, self.a_reemplazar, self.a_principal):
             accion.setEnabled(en_editor)
         if en_editor:
             self.a_sync.setEnabled(synctex_available())
+            self._estado_compilacion(self._ultimo_estado)
             self._actualizar_titulo()
         else:
             self.setWindowTitle(f"Conversor — {APP_NAME}")
@@ -689,7 +749,6 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
             self.editor_page.stop()
-            self.converter_page.stop()
 
         # Se apunta antes de cerrar las pestañas: después ya no hay editor.
         editor = self.editor_page.editor
@@ -702,4 +761,5 @@ class MainWindow(QMainWindow):
         if self.recuperacion is not None:
             self.recuperacion.close()
         self._guardar_ajustes(ultimo)
+        self.converter_page.stop()
         event.accept()

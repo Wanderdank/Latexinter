@@ -21,7 +21,7 @@ import tempfile
 from collections import Counter
 from dataclasses import replace as _replace
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 from . import mathfix, mathocr, pdfmath, texpost
 from .common import (
@@ -29,6 +29,7 @@ from .common import (
     ConversionResult,
     Logger,
     as_logger,
+    check_cancelled,
     human_size,
     relative_posix,
     require_module,
@@ -92,6 +93,18 @@ def parse_pages(spec: Optional[str], total: Optional[int] = None) -> Optional[li
                 f"El PDF tiene {total} páginas; no existen: {', '.join(map(str, fuera))}"
             )
     return pages
+
+
+def format_pages(pages: Iterable[int]) -> str:
+    """Lo contrario de parse_pages: de índices base 0 a un texto como «1-3,5»."""
+    tramos: list[str] = []
+    ordenadas = sorted(set(pages))
+    while ordenadas:
+        inicio = fin = ordenadas.pop(0)
+        while ordenadas and ordenadas[0] == fin + 1:
+            fin = ordenadas.pop(0)
+        tramos.append(f"{inicio + 1}" if inicio == fin else f"{inicio + 1}-{fin + 1}")
+    return ",".join(tramos)
 
 
 # ────────────────────────────────────────────────────────────
@@ -276,6 +289,20 @@ def replace_toc_table(md: str) -> str:
         else:
             result.extend(block)
     return "\n".join(result)
+
+
+# El texto de dentro de una figura, que pymupdf4llm repite después de ella entre
+# dos rótulos. Ya está en la imagen, y fuera de ella son letras sueltas.
+_PICTURE_TEXT = re.compile(
+    r"\*{0,2}-{3,}\s*Start of picture text\s*-{3,}\*{0,2}"
+    r".*?"
+    r"\*{0,2}-{3,}\s*End of picture text\s*-{3,}\*{0,2}(?:<br>)?",
+    re.DOTALL,
+)
+
+
+def strip_picture_text(md: str) -> str:
+    return _PICTURE_TEXT.sub("", md)
 
 
 def clean_markdown(md: str) -> str:
@@ -641,6 +668,7 @@ def _read(page, rect, dpi: int, ocr, cache: dict, max_tokens: Optional[int] = No
     """Una lectura del OCR, guardada por si se vuelve a pedir."""
     clave = (id(page), tuple(round(v, 1) for v in rect), dpi)
     if clave not in cache:
+        check_cancelled()
         imagen = mathocr.render_region(page, rect, dpi=dpi, exclude=exclude)
         cache[clave] = ocr.recognize(imagen, max_tokens) if imagen is not None else None
     return cache[clave]
@@ -892,6 +920,8 @@ def pdf_to_latex(
 
         parts: list[str] = []
         for index, chunk in enumerate(chunks):
+            check_cancelled()
+            log(f"Página {index + 1} de {len(chunks)}")
             text = chunk["text"] if isinstance(chunk, dict) else str(chunk)
             # Los trozos llegan en el mismo orden que las páginas pedidas.
             page_index = selected[index] if index < len(selected) else None
@@ -908,6 +938,8 @@ def pdf_to_latex(
                 )
                 replaced_equations += hechas
                 equations_found.extend((page_index + 1, latex) for latex in comentadas)
+
+            text = strip_picture_text(text)
 
             # Antes que nada el logotipo: "L[A]TEX" es una A en superíndice y
             # si no se arregla aquí acaba convertido en la fórmula $L^{A}$.

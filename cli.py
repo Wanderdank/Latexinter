@@ -1,20 +1,22 @@
 """
 cli.py - Latexinter desde la línea de comandos.
 
+    python cli.py pdf2docx documento.pdf [--pages 1-5] [--ocr] [--toc]
     python cli.py pdf2tex  documento.pdf [--pages 1-5] [--twocolumn]
     python cli.py tex2pdf  documento.tex [--engine xelatex]
     python cli.py tex2docx documento.tex [--toc]
     python cli.py docx2tex documento.docx
+    python cli.py docx2pdf documento.docx [--via-latex]
     python cli.py gui                      # abre la interfaz de escritorio
     python cli.py deps                     # comprueba las dependencias
 
-Por defecto el resultado se guarda junto al archivo original.
+Por defecto el resultado se guarda junto al archivo original. Se pueden pasar
+varios archivos a la vez:  python cli.py pdf2docx *.pdf -d convertidos
 """
 
 from __future__ import annotations
 
 import argparse
-import io
 import sys
 from pathlib import Path
 
@@ -32,8 +34,9 @@ from converters.common import refresh_path  # noqa: E402
 
 # La consola de Windows no siempre habla UTF-8.
 if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+    for flujo in (sys.stdout, sys.stderr):
+        if hasattr(flujo, "reconfigure"):
+            flujo.reconfigure(encoding="utf-8", errors="replace")
 
 
 def log(message: str) -> None:
@@ -58,9 +61,36 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="comando", required=True)
 
     def common(p: argparse.ArgumentParser) -> None:
-        p.add_argument("archivo", help="Archivo de entrada")
-        p.add_argument("-o", "--output", help="Archivo de salida")
+        p.add_argument("archivos", nargs="+", metavar="archivo", help="Archivos de entrada")
+        p.add_argument("-o", "--output", help="Archivo de salida (solo con un archivo de entrada)")
         p.add_argument("-d", "--output-dir", help="Carpeta de salida")
+
+    pdf2docx = sub.add_parser("pdf2docx", help="PDF → Word")
+    common(pdf2docx)
+    pdf2docx.add_argument("--pages", help='Páginas: "1-5" o "1,3,8-10"')
+    pdf2docx.add_argument("--no-images", action="store_true", help="No extraer imágenes")
+    pdf2docx.add_argument("--no-math", action="store_true", help="No reconstruir las fórmulas")
+    pdf2docx.add_argument(
+        "--ocr", action="store_true",
+        help="Leer también las ecuaciones con un modelo de OCR (más lento)",
+    )
+    pdf2docx.add_argument(
+        "--ocr-motor", choices=[backend.key for backend in mathocr.BACKENDS],
+        help="Qué modelo de OCR usar (por defecto, Pix2Text-MFR)",
+    )
+    pdf2docx.add_argument("--toc", action="store_true", help="Incluir índice")
+    pdf2docx.add_argument("--keep-tex", action="store_true", help="Conservar el .tex intermedio")
+    pdf2docx.add_argument("--reference-doc", help="Plantilla .docx de estilos")
+
+    docx2pdf = sub.add_parser("docx2pdf", help="Word → PDF")
+    common(docx2pdf)
+    docx2pdf.add_argument(
+        "--via-latex", action="store_true",
+        help="Compilar con LaTeX aunque haya Word o LibreOffice instalados",
+    )
+    docx2pdf.add_argument(
+        "--engine", choices=["pdflatex", "xelatex", "lualatex"], default="pdflatex"
+    )
 
     pdf2tex = sub.add_parser("pdf2tex", help="PDF → LaTeX")
     common(pdf2tex)
@@ -123,6 +153,20 @@ def build_parser() -> argparse.ArgumentParser:
 def options_from(args: argparse.Namespace) -> dict:
     """Traduce los argumentos del comando a las opciones del conversor."""
     mapping = {
+        "pdf2docx": lambda a: {
+            "pages": a.pages,
+            "extract_images": not a.no_images,
+            "math_reconstruction": not a.no_math,
+            "math_ocr": a.ocr,
+            "ocr_backend": a.ocr_motor,
+            "toc": a.toc,
+            "keep_latex": a.keep_tex,
+            "reference_doc": a.reference_doc,
+        },
+        "docx2pdf": lambda a: {
+            "via_latex": a.via_latex,
+            "engine": a.engine,
+        },
         "pdf2tex": lambda a: {
             "pages": a.pages,
             "twocolumn": a.twocolumn,
@@ -212,32 +256,41 @@ def main(argv: list[str] | None = None) -> int:
     if args.comando == "deps":
         return check_dependencies()
 
+    if args.output and len(args.archivos) > 1:
+        print("\n  ✗ --output solo vale con un archivo de entrada; usa --output-dir.\n")
+        return 2
+
     conversion = CONVERSIONS[args.comando]
-    banner(conversion.label)
+    fallidos = 0
+    for archivo in args.archivos:
+        banner(f"{conversion.label}  ·  {Path(archivo).name}")
+        try:
+            resultado = convert(
+                args.comando,
+                archivo,
+                args.output,
+                args.output_dir,
+                logger=log,
+                **options_from(args),
+            )
+        except ConversionError as exc:
+            print()
+            print(f"  ✗ {exc}")
+            print()
+            fallidos += 1
+            continue
 
-    try:
-        resultado = convert(
-            args.comando,
-            args.archivo,
-            args.output,
-            args.output_dir,
-            logger=log,
-            **options_from(args),
-        )
-    except ConversionError as exc:
         print()
-        print(f"  ✗ {exc}")
+        print(f"  ✓ {resultado.output}  ({human_size(resultado.output)})")
+        for extra in resultado.extras:
+            print(f"    + {extra.name}")
+        for aviso in resultado.warnings:
+            print(f"    ⚠ {aviso}")
         print()
-        return 1
 
-    print()
-    print(f"  ✓ {resultado.output}  ({human_size(resultado.output)})")
-    for extra in resultado.extras:
-        print(f"    + {extra.name}")
-    for aviso in resultado.warnings:
-        print(f"    ⚠ {aviso}")
-    print()
-    return 0
+    if len(args.archivos) > 1:
+        print(f"  {len(args.archivos) - fallidos} de {len(args.archivos)} convertidos.\n")
+    return 1 if fallidos else 0
 
 
 if __name__ == "__main__":

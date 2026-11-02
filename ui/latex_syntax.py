@@ -41,7 +41,28 @@ class LatexHighlighter(QSyntaxHighlighter):
 
     def __init__(self, document):
         super().__init__(document)
+        self._crear_formatos()
 
+        self.regla_comando = re.compile(r"\\(?:[A-Za-z@]+\*?|[^A-Za-z\s])")
+        self.regla_llaves = re.compile(r"[{}\[\]]")
+        self.regla_math_inline = re.compile(r"(?<!\\)\$(?:[^$\\\n]|\\.)*\$")
+        self.regla_comentario = re.compile(r"(?<!\\)%[^\n]*")
+        self.regla_pendiente = re.compile(r"\b(TODO|FIXME|REVISAR|OJO|XXX)\b")
+
+        self.inicio_math = re.compile(r"(?<!\\)\$\$|\\\[|\\begin\{(?:equation|align|"
+                                      r"gather|multline|eqnarray|displaymath)\*?\}")
+        self.fin_math = re.compile(r"(?<!\\)\$\$|\\\]|\\end\{(?:equation|align|"
+                                   r"gather|multline|eqnarray|displaymath)\*?\}")
+        self.inicio_verbatim = re.compile(r"\\begin\{(?:verbatim|lstlisting|minted|alltt)\}")
+        self.fin_verbatim = re.compile(r"\\end\{(?:verbatim|lstlisting|minted|alltt)\}")
+
+        theme.avisador.cambiado.connect(self._recolorear)
+
+    def _recolorear(self) -> None:
+        self._crear_formatos()
+        self.rehighlight()
+
+    def _crear_formatos(self) -> None:
         self.f_comando = _format(theme.COLOR_COMANDO, bold=True)
         self.f_entorno = _format(theme.COLOR_ENTORNO, bold=True)
         self.f_matematicas = _format(theme.COLOR_MATEMATICAS)
@@ -66,19 +87,6 @@ class LatexHighlighter(QSyntaxHighlighter):
              [self.f_comando, self.f_comando, self.f_llave,
               self.f_referencia, self.f_llave]),
         ]
-
-        self.regla_comando = re.compile(r"\\(?:[A-Za-z@]+\*?|[^A-Za-z\s])")
-        self.regla_llaves = re.compile(r"[{}\[\]]")
-        self.regla_math_inline = re.compile(r"(?<!\\)\$(?:[^$\\\n]|\\.)*\$")
-        self.regla_comentario = re.compile(r"(?<!\\)%[^\n]*")
-        self.regla_pendiente = re.compile(r"\b(TODO|FIXME|REVISAR|OJO|XXX)\b")
-
-        self.inicio_math = re.compile(r"(?<!\\)\$\$|\\\[|\\begin\{(?:equation|align|"
-                                      r"gather|multline|eqnarray|displaymath)\*?\}")
-        self.fin_math = re.compile(r"(?<!\\)\$\$|\\\]|\\end\{(?:equation|align|"
-                                   r"gather|multline|eqnarray|displaymath)\*?\}")
-        self.inicio_verbatim = re.compile(r"\\begin\{(?:verbatim|lstlisting|minted|alltt)\}")
-        self.fin_verbatim = re.compile(r"\\end\{(?:verbatim|lstlisting|minted|alltt)\}")
 
     # ── Pintado ──
     def highlightBlock(self, text: str) -> None:

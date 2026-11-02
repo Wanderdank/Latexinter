@@ -231,6 +231,16 @@ def _current_token() -> Optional[CancelToken]:
     return getattr(_hilo, "token", None)
 
 
+def check_cancelled() -> None:
+    """
+    Para el trabajo que corre dentro de Python (leer un PDF, el OCR), que no se
+    puede matar desde fuera: lo llama cada cierto tiempo y aquí se interrumpe.
+    """
+    token = _current_token()
+    if token is not None and token.cancelled:
+        raise Cancelled()
+
+
 def _kill(proceso: subprocess.Popen) -> None:
     """Mata el proceso y lo que haya lanzado (MiKTeX instala paquetes así)."""
     if proceso.poll() is not None:
@@ -255,10 +265,12 @@ def run_command(
     cwd: Optional[Path] = None,
     logger: Optional[Logger] = None,
     timeout: Optional[int] = 600,
+    env: Optional[dict[str, str]] = None,
 ) -> subprocess.CompletedProcess:
     """
     Ejecuta un comando y captura su salida (sin ventana de consola). Si el
-    hilo trabaja dentro de cancellable(), el comando se puede detener.
+    hilo trabaja dentro de cancellable(), el comando se puede detener. Lo que
+    venga en env se añade a las variables de entorno actuales.
     """
     log = as_logger(logger)
     log(f"$ {' '.join(str(c) for c in cmd)}")
@@ -272,6 +284,7 @@ def run_command(
         proceso = subprocess.Popen(
             argumentos,
             cwd=str(cwd) if cwd else None,
+            env={**os.environ, **env} if env else None,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -356,9 +369,9 @@ def resolve_output(
     - Si dio una carpeta, se usa esa carpeta con el nombre del original.
     - Si no, el archivo sale junto al original.
 
-    Con overwrite=False se evita pisar un archivo que ya existía (los .tex
-    generados), con overwrite=True se pisa (los artefactos de compilación:
-    .pdf y .docx regenerables a partir del .tex).
+    Con overwrite=False se evita pisar un archivo que ya existía (los .tex y
+    .docx generados), con overwrite=True se pisa (el .pdf de una compilación,
+    regenerable a partir del .tex).
     """
     # Rutas absolutas: pandoc se ejecuta dentro de la carpeta de salida, y una
     # ruta relativa como «out/doc.tex» acabaría en «out/out/doc.tex».

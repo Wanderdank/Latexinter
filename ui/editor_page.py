@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal
-from PyQt5.QtGui import QTextCursor
+from PyQt5.QtGui import QIcon, QTextCursor
 from PyQt5.QtWidgets import (
     QFileDialog,
     QMessageBox,
@@ -44,11 +44,12 @@ from converters.tools import (
     word_count,
 )
 
-from . import theme
+from . import icons, theme
 from .latex_editor import LatexEditor
 from .panels import FindBar, OutlinePanel, ProblemsPanel, ProjectPanel
 from .pdf_view import PdfView
 from .templates import DOCUMENTO_VACIO
+from .widgets import boton_icono
 
 FILTRO_TEX = "LaTeX (*.tex);;Todos los archivos (*)"
 _RE_DOCUMENTCLASS = re.compile(r"^[ \t]*\\documentclass", re.M)
@@ -313,11 +314,7 @@ class EditorPage(QWidget):
         """Añade la pestaña con un botón de cierre acorde con el tema."""
         indice = self.documentos.addTab(editor, nombre)
 
-        boton = QPushButton("✕")
-        boton.setObjectName("plano")
-        boton.setFixedSize(18, 18)
-        boton.setCursor(Qt.PointingHandCursor)
-        boton.setToolTip("Cerrar")
+        boton = boton_icono("cerrar", "Cerrar", lado=18)
         boton.clicked.connect(lambda: self._cerrar_desde_boton(boton))
         self.documentos.tabBar().setTabButton(indice, QTabBar.RightSide, boton)
 
@@ -480,19 +477,22 @@ class EditorPage(QWidget):
 
     def _actualizar_titulos(self) -> None:
         for indice, editor in enumerate(self._editores()):
-            titulo = editor.title
-            if (
-                self.documento_principal is not None
+            # Con un solo documento abierto no hay nada que distinguir.
+            principal = (
+                self.documentos.count() > 1
+                and self.documento_principal is not None
                 and editor.path is not None
                 and editor.path.resolve() == self.documento_principal.resolve()
-            ):
-                titulo = "★ " + titulo
-            self.documentos.setTabText(indice, titulo)
+            )
+            self.documentos.setTabText(indice, editor.title)
+            self.documentos.setTabIcon(
+                indice, icons.icono("estrella", theme.ACENTO) if principal else QIcon()
+            )
         self.documentChanged.emit()
 
     def _cambio_de_pestana(self) -> None:
         self._refrescar_esquema()
-        self.documentChanged.emit()
+        self._actualizar_titulos()
         editor = self.editor
         if editor is not None:
             cursor = editor.textCursor()

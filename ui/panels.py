@@ -31,7 +31,8 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from . import theme
+from . import icons, theme
+from .widgets import boton_icono
 from converters.tools import ERROR, INFO, WARNING, Problem
 
 
@@ -142,8 +143,12 @@ class OutlinePanel(QWidget):
 # Problemas
 # ════════════════════════════════════════════════════════════
 
-_ICONOS = {ERROR: "✗", WARNING: "⚠", INFO: "•"}
-_COLORES = {ERROR: theme.ROJO, WARNING: theme.AMBAR, INFO: theme.TEXTO_SUAVE}
+def _icono_de(severidad: str):
+    if severidad == ERROR:
+        return icons.icono("error", theme.ROJO)
+    if severidad == WARNING:
+        return icons.icono("aviso", theme.AMBAR)
+    return icons.icono("menos", theme.TEXTO_TENUE)
 
 
 class ProblemsPanel(QWidget):
@@ -154,6 +159,8 @@ class ProblemsPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._problemas: list[Problem] = []
+        self._compilado = False
+        theme.avisador.cambiado.connect(self._al_cambiar_tema)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
@@ -185,7 +192,12 @@ class ProblemsPanel(QWidget):
 
     def set_problems(self, problemas: list[Problem]) -> None:
         self._problemas = problemas
+        self._compilado = True
         self._pintar()
+
+    def _al_cambiar_tema(self) -> None:
+        if self._compilado:
+            self._pintar()
 
     def clear(self) -> None:
         self.set_problems([])
@@ -197,12 +209,8 @@ class ProblemsPanel(QWidget):
 
         mostrados = errores + (avisos if self.ver_avisos.isChecked() else [])
         for problema in mostrados:
-            item = QTreeWidgetItem([
-                _ICONOS.get(problema.severity, "•"),
-                problema.message,
-                problema.location,
-            ])
-            item.setForeground(0, QBrush(QColor(_COLORES.get(problema.severity, theme.TEXTO))))
+            item = QTreeWidgetItem(["", problema.message, problema.location])
+            item.setIcon(0, _icono_de(problema.severity))
             if problema.severity != ERROR:
                 item.setForeground(1, QBrush(QColor(theme.TEXTO_SUAVE)))
             pista = problema.message
@@ -324,16 +332,8 @@ class FindBar(QFrame):
         self.resultado.setMinimumWidth(90)
         fila.addWidget(self.resultado)
 
-        for texto, tooltip, accion in (
-            ("↑", "Anterior (Shift+F3)", lambda: self._buscar(True)),
-            ("↓", "Siguiente (F3)", lambda: self._buscar(False)),
-        ):
-            boton = QPushButton(texto)
-            boton.setObjectName("plano")
-            boton.setFixedWidth(30)
-            boton.setToolTip(tooltip)
-            boton.clicked.connect(accion)
-            fila.addWidget(boton)
+        fila.addWidget(boton_icono("chevron_arriba", "Anterior (Shift+F3)", lambda: self._buscar(True)))
+        fila.addWidget(boton_icono("chevron_abajo", "Siguiente (F3)", lambda: self._buscar(False)))
 
         self.mayusculas = QCheckBox("Aa")
         self.mayusculas.setToolTip("Distinguir mayúsculas")
@@ -345,11 +345,7 @@ class FindBar(QFrame):
         self.regex.toggled.connect(lambda _: self._buscar(False, mover=False))
         fila.addWidget(self.regex)
 
-        cerrar = QPushButton("✕")
-        cerrar.setObjectName("plano")
-        cerrar.setFixedWidth(30)
-        cerrar.clicked.connect(self.ocultar)
-        fila.addWidget(cerrar)
+        fila.addWidget(boton_icono("cerrar", "Cerrar", self.ocultar))
         layout.addLayout(fila)
 
         # Fila de reemplazo

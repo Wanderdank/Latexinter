@@ -87,6 +87,7 @@ class LatexEditor(QPlainTextEdit):
         self._setup_completer()
         self._update_margins()
         self._refresh_extra_selections()
+        theme.avisador.cambiado.connect(self._refresh_extra_selections)
 
     # ════════════════════════════════════════════════════════
     # Números de línea
@@ -116,7 +117,7 @@ class LatexEditor(QPlainTextEdit):
 
     def paint_line_numbers(self, event) -> None:
         painter = QPainter(self._line_numbers)
-        painter.fillRect(event.rect(), QColor(theme.FONDO))
+        painter.fillRect(event.rect(), QColor(theme.FONDO_CAMPO))
 
         bloque = self.firstVisibleBlock()
         numero = bloque.blockNumber()

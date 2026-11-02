@@ -25,6 +25,29 @@ def test_parse_pages_fuera_del_documento():
         p.parse_pages("8-9", 5)
 
 
+def test_format_pages_agrupa_rangos():
+    assert p.format_pages([0, 1, 2, 4]) == "1-3,5"
+    assert p.format_pages([7, 3, 3]) == "4,8"
+    assert p.format_pages([]) == ""
+
+
+def test_format_pages_es_lo_contrario_de_parse_pages():
+    assert p.parse_pages(p.format_pages([0, 2, 3, 9]), 10) == [0, 2, 3, 9]
+
+
+# ── Texto de las figuras ────────────────────────────────────
+
+def test_quita_el_texto_de_las_figuras():
+    md = (
+        "Antes\n\n----- Start of picture text -----<br>\nA B C\n"
+        "----- End of picture text -----<br>\n\nDespués"
+    )
+    limpio = p.strip_picture_text(md)
+    assert "picture text" not in limpio
+    assert "A B C" not in limpio
+    assert "Antes" in limpio and "Después" in limpio
+
+
 # ── Títulos ─────────────────────────────────────────────────
 
 def test_normalize_headings_usa_la_numeracion():

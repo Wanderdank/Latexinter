@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
 from .common import (
     Cancelled,
@@ -27,6 +27,7 @@ from .common import (
     open_in_explorer,
     reveal_in_explorer,
 )
+from .combined import docx_to_pdf, pdf_to_docx
 from .docx_to_latex import docx_to_latex
 from .latex_to_docx import latex_to_docx
 from .latex_to_pdf import latex_to_pdf
@@ -42,14 +43,18 @@ __all__ = [
     "MissingDependency",
     "SUPPORTED_EXTENSIONS",
     "cancellable",
+    "common_targets",
+    "conversion_to",
     "conversions_for",
     "convert",
     "dependency_report",
     "docx_to_latex",
+    "docx_to_pdf",
     "human_size",
     "latex_to_docx",
     "latex_to_pdf",
     "open_in_explorer",
+    "pdf_to_docx",
     "pdf_to_latex",
     "reveal_in_explorer",
 ]
@@ -72,6 +77,17 @@ class Conversion:
 
 
 CONVERSIONS: dict[str, Conversion] = {
+    "pdf2docx": Conversion(
+        key="pdf2docx",
+        label="PDF → Word",
+        description="Crea un .docx editable: las fórmulas del PDF pasan a ser ecuaciones de Word.",
+        source_extensions=(".pdf",),
+        target_extension=".docx",
+        function=pdf_to_docx,
+        options=frozenset({"pages", "extract_images", "math_reconstruction",
+                           "math_ocr", "ocr_backend", "toc", "keep_latex",
+                           "reference_doc"}),
+    ),
     "pdf2tex": Conversion(
         key="pdf2tex",
         label="PDF → LaTeX",
@@ -110,6 +126,15 @@ CONVERSIONS: dict[str, Conversion] = {
         function=docx_to_latex,
         options=frozenset({"twocolumn", "extract_images"}),
     ),
+    "docx2pdf": Conversion(
+        key="docx2pdf",
+        label="Word → PDF",
+        description="Exporta con Word o LibreOffice si están instalados; si no, compila con LaTeX.",
+        source_extensions=(".docx",),
+        target_extension=".pdf",
+        function=docx_to_pdf,
+        options=frozenset({"via_latex", "engine"}),
+    ),
 }
 
 # Extensiones que la interfaz sabe abrir.
@@ -121,6 +146,26 @@ SUPPORTED_EXTENSIONS = tuple(
 def conversions_for(path: Path | str) -> list[Conversion]:
     """Conversiones disponibles para un archivo, en orden de uso más probable."""
     return [c for c in CONVERSIONS.values() if c.accepts(path)]
+
+
+def conversion_to(path: Path | str, target_extension: str) -> Optional[Conversion]:
+    """La conversión que lleva este archivo a ese formato, si la hay."""
+    for conversion in conversions_for(path):
+        if conversion.target_extension == target_extension:
+            return conversion
+    return None
+
+
+def common_targets(paths: Iterable[Path | str]) -> list[str]:
+    """
+    Formatos a los que se pueden llevar todos estos archivos a la vez, para
+    convertir un lote de una tacada. El orden es el del primero de la lista.
+    """
+    objetivos: Optional[list[str]] = None
+    for path in paths:
+        propios = [c.target_extension for c in conversions_for(path)]
+        objetivos = propios if objetivos is None else [e for e in objetivos if e in propios]
+    return objetivos or []
 
 
 def convert(
