@@ -121,12 +121,45 @@ _ENVOLTURAS = (
 
 
 # Restos que los modelos añaden por su cuenta: espacios finos sueltos al
-# principio o al final, delimitadores vacíos, y el punto o la coma que en el
-# original pertenecían a la frase y no a la fórmula.
-_RUIDO_INICIAL = re.compile(r"^(?:\\[,;!:> ]|\\quad|\\qquad|\\left\.|\s)+")
+# principio o al final, y el punto o la coma que en el original pertenecían a
+# la frase y no a la fórmula.
+_RUIDO_INICIAL = re.compile(r"^(?:\\[,;!:> ]|\\quad|\\qquad|\s)+")
 _RUIDO_FINAL = re.compile(
-    r"(?:\\[,;!:> ]|\\quad|\\qquad|\\right\.|\\vert|\\mid|[.,;|]|\s)+$"
+    r"(?:\\[,;!:> ]|\\quad|\\qquad|\\hspace\*?\{[^{}]*\}|\\vert|\\mid|[.,;|]|\s)$"
 )
+# El número de la ecuación, que el modelo copia como «\tag*{(14)}».
+_ETIQUETA = re.compile(r"\\tag\*?\{[^{}]*\}")
+_PIDE_DELIMITADOR = re.compile(r"\\(?:left|right|middle|[bB]igg?[lrm]?)\s*$")
+_BARRA = re.compile(r"\\vert(?![A-Za-z])|\\mid(?![A-Za-z])|(?<!\\)\|")
+
+
+def _quitar_ruido_inicial(latex: str) -> str:
+    latex = _RUIDO_INICIAL.sub("", latex)
+    # Un \left. solo sobra si no tiene pareja: en «\left. f \right|_0» hace falta.
+    if latex.startswith(r"\left.") and latex.count(r"\left") > latex.count(r"\right"):
+        return _quitar_ruido_inicial(latex[len(r"\left."):])
+    return latex
+
+
+def _quitar_ruido_final(latex: str) -> str:
+    """
+    Quita el ruido del final de uno en uno, porque no todo lo que lo parece lo
+    es: la barra de «\\right|» o de «\\|» es parte de la fórmula, y la última
+    barra de «|x|» cierra la primera.
+    """
+    while True:
+        if latex.endswith(r"\right.") and latex.count(r"\right") > latex.count(r"\left"):
+            latex = latex[:-len(r"\right.")]
+            continue
+        ruido = _RUIDO_FINAL.search(latex)
+        if not ruido:
+            return latex
+        resto = latex[:ruido.start()]
+        if resto.endswith("\\") or _PIDE_DELIMITADOR.search(resto):
+            return latex
+        if ruido.group(0) in ("|", r"\vert", r"\mid") and len(_BARRA.findall(latex)) % 2 == 0:
+            return latex
+        latex = resto
 
 
 def clean_latex(texto: str) -> str:
@@ -149,8 +182,9 @@ def clean_latex(texto: str) -> str:
     salida = re.sub(r"\{\s+", "{", salida)
     salida = re.sub(r"\s+\}", "}", salida)
 
-    salida = _RUIDO_INICIAL.sub("", salida)
-    salida = _RUIDO_FINAL.sub("", salida)
+    salida = _ETIQUETA.sub("", salida)
+    salida = _quitar_ruido_inicial(salida)
+    salida = _quitar_ruido_final(salida)
     salida = _quitar_llaves_externas(salida)
     return salida.strip()
 
@@ -184,7 +218,267 @@ def looks_usable(latex: str) -> bool:
     # Un modelo atascado repite el mismo trozo una y otra vez.
     if re.search(r"(.{4,})\1{4,}", latex):
         return False
-    return True
+    return structure_error(latex) is None
+
+
+# ────────────────────────────────────────────────────────────
+# ¿Compilará?
+# ────────────────────────────────────────────────────────────
+#
+# Que los glifos de una lectura coincidan con los del PDF no dice nada de su
+# LaTeX: el modelo puede acertar todos los caracteres y dejar un \left sin
+# \right, o cortarse a mitad de un aligned. Una sola fórmula así le rompe a
+# pdflatex el resto de la página, así que estas lecturas se descartan y se
+# queda la reconstrucción por geometría.
+
+# Los comandos existen con el preámbulo que genera el conversor (amsmath y
+# amssymb). Fuera se quedan los que necesitan otro paquete, y los que compilan
+# solo en ciertos sitios (\hline, \tag, \label) o de forma infija y frágil
+# (\over, \atop, \atopwithdelims): el modelo no los necesita para acertar.
+_COMANDOS = frozenset("""
+    alpha beta gamma delta epsilon varepsilon zeta eta theta vartheta iota kappa
+    varkappa lambda mu nu xi pi varpi rho varrho sigma varsigma tau upsilon phi
+    varphi chi psi omega digamma Gamma Delta Theta Lambda Xi Pi Sigma Upsilon Phi
+    Psi Omega varGamma varDelta varTheta varLambda varXi varPi varSigma varUpsilon
+    varPhi varPsi varOmega
+    aleph beth gimel daleth ell hbar hslash imath jmath wp Re Im partial nabla infty
+    emptyset varnothing angle measuredangle sphericalangle prime backprime top bot
+    forall exists nexists neg lnot flat natural sharp clubsuit diamondsuit
+    heartsuit spadesuit mho Box Diamond square blacksquare triangle triangledown
+    vartriangle blacktriangle blacktriangledown blacktriangleright star bigstar
+    bullet circ cdot ast dagger ddagger complement surd cdotp colon
+    pm mp times div setminus smallsetminus wedge vee land lor cap cup sqcap sqcup
+    uplus amalg oplus ominus otimes oslash odot bigcirc dotplus barwedge veebar
+    doublebarwedge boxdot boxminus boxplus boxtimes circledast circledcirc
+    circleddash centerdot divideontimes intercal leftthreetimes rightthreetimes
+    ltimes rtimes lhd rhd unlhd unrhd wr Cup Cap triangleleft triangleright diamond
+    sum prod coprod int oint iint iiint iiiint idotsint bigcap bigcup bigoplus
+    bigotimes bigodot bigsqcup biguplus bigvee bigwedge intop ointop smallint
+    leq le geq ge neq ne ll gg lll ggg equiv sim simeq cong approx approxeq asymp
+    propto prec succ preceq succeq precsim succsim precapprox succapprox
+    preccurlyeq succcurlyeq subset supset subseteq supseteq subsetneq supsetneq
+    subsetneqq supsetneqq Subset Supset sqsubset sqsupset sqsubseteq sqsupseteq in
+    ni notin owns mid parallel shortmid shortparallel nmid nparallel perp models
+    vdash dashv Vdash vDash nVdash doteq doteqdot bumpeq circeq triangleq
+    risingdotseq eqsim backsim backsimeq thicksim thickapprox leqq geqq leqslant
+    geqslant lesssim gtrsim lessapprox gtrapprox lessdot gtrdot lessgtr gtrless
+    ncong nsim nleq ngeq nprec nsucc nsubseteq nsupseteq gneq lneq lvertneqq
+    varsubsetneq varsubsetneqq precneqq trianglelefteq trianglerighteq frown smile
+    smallfrown smallsmile pitchfork because therefore between not
+    leftarrow gets rightarrow to Leftarrow Rightarrow leftrightarrow Leftrightarrow
+    longleftarrow longrightarrow Longleftarrow Longrightarrow longleftrightarrow
+    Longleftrightarrow mapsto longmapsto hookleftarrow hookrightarrow uparrow
+    downarrow updownarrow Uparrow Downarrow Updownarrow nearrow searrow swarrow
+    nwarrow leftharpoonup leftharpoondown rightharpoonup rightharpoondown
+    rightleftharpoons leftrightharpoons leftrightarrows rightleftarrows
+    rightrightarrows leftleftarrows twoheadrightarrow twoheadleftarrow
+    rightarrowtail leftarrowtail rightsquigarrow leftrightsquigarrow leadsto
+    circlearrowleft circlearrowright curvearrowleft curvearrowright looparrowleft
+    looparrowright upharpoonleft upharpoonright downharpoonleft downharpoonright
+    nleftarrow nrightarrow nleftrightarrow nRightarrow Rrightarrow dashrightarrow
+    dashleftarrow impliedby implies iff
+    langle rangle lfloor rfloor lceil rceil lbrace rbrace lbrack rbrack lvert rvert
+    lVert rVert vert Vert lgroup rgroup backslash ulcorner urcorner llcorner
+    lrcorner arrowvert Arrowvert
+    arccos arcsin arctan arg cos cosh cot coth csc deg det dim exp gcd hom inf
+    injlim ker lg lim liminf limsup ln log max min Pr projlim sec sin sinh sup tan
+    tanh varinjlim varliminf varlimsup varprojlim bmod
+    dots dotsb dotsc dotsi dotsm dotso cdots ldots vdots ddots hdots
+    bf rm it sf tt cal displaystyle textstyle scriptstyle scriptscriptstyle limits
+    nolimits displaylimits mathstrut
+    quad qquad thinspace medspace thickspace negthinspace negmedspace negthickspace
+    enspace enskip
+""".split())
+
+# Comandos que piden argumentos: sin ellos, pdflatex da error.
+_ARGUMENTOS = {
+    **{c: 1 for c in """
+        hat widehat tilde widetilde bar breve check acute grave dot ddot dddot ddddot
+        vec mathring overline underline overbrace underbrace overleftarrow
+        overrightarrow overleftrightarrow underleftarrow underrightarrow
+        underleftrightarrow boxed phantom hphantom vphantom smash mathrm mathbf mathit
+        mathsf mathtt mathcal mathbb mathfrak mathnormal boldsymbol pmb Bbb mathop
+        mathbin mathrel mathord mathopen mathclose mathinner sqrt operatorname
+        operatornamewithlimits substack pmod pod xrightarrow xleftarrow
+    """.split()},
+    **{c: 2 for c in "frac dfrac tfrac cfrac binom dbinom tbinom overset underset stackrel sideset".split()},
+}
+# Lo de dentro es texto, no matemáticas: ahí ^, _ o \alpha son un error.
+_COMANDOS_DE_TEXTO = frozenset("text mbox textrm textbf textit textsf texttt textnormal textup".split())
+_SIGNOS = frozenset(",;:!> {}|%#&_\\")
+_SIGNOS_EN_TEXTO = frozenset(",;:! {}%#&_\\")
+_TAMANOS = frozenset(
+    prefijo + sufijo for prefijo in ("big", "Big", "bigg", "Bigg") for sufijo in ("", "l", "r", "m")
+)
+_DELIMITADORES = frozenset(r"""
+    ( ) [ ] | / . < > \{ \} \| \langle \rangle \lfloor \rfloor \lceil \rceil \lbrace
+    \rbrace \lbrack \rbrack \vert \Vert \lvert \rvert \lVert \rVert \uparrow \downarrow
+    \updownarrow \Uparrow \Downarrow \Updownarrow \backslash \lgroup \rgroup \ulcorner
+    \urcorner \llcorner \lrcorner \arrowvert \Arrowvert
+""".split())
+# Solo los que pueden ir dentro de una fórmula destacada: equation o align
+# dentro de \[ … \] no compilan.
+_ENTORNOS = frozenset("""
+    matrix pmatrix bmatrix Bmatrix vmatrix Vmatrix smallmatrix cases aligned
+    alignedat gathered split array subarray
+""".split())
+_TOKEN_LATEX = re.compile(r"\\[A-Za-z]+|\\.|\s+|.", re.DOTALL)
+
+
+@dataclass
+class _Marco:
+    """Un nivel de anidamiento: llaves, \\left…\\right o un entorno."""
+    tipo: str
+    entorno: bool = False
+    texto: bool = False
+    es_argumento: bool = False
+    argumentos: int = 0            # los que aún debe el último comando
+    argumento_de_texto: bool = False
+    sup: bool = False              # este átomo ya tiene superíndice…
+    sub: bool = False              # …o subíndice
+
+    def atomo(self) -> None:
+        """Llega algo que ocupa sitio: un argumento pendiente o un átomo nuevo."""
+        if self.argumentos:
+            self.argumentos -= 1
+        else:
+            self.sup = self.sub = False
+
+
+def _leer_grupo(tokens: list[str], i: int) -> tuple[Optional[str], int]:
+    """El contenido de «{…}» sin llaves anidadas (nombre de entorno, columnas)."""
+    if i >= len(tokens) or tokens[i] != "{":
+        return None, i
+    fin = i + 1
+    while fin < len(tokens) and tokens[fin] not in "{}":
+        fin += 1
+    if fin >= len(tokens) or tokens[fin] != "}":
+        return None, i
+    return "".join(tokens[i + 1:fin]), fin + 1
+
+
+def structure_error(latex: str) -> Optional[str]:
+    """
+    Por qué esta fórmula no compilaría con pdflatex, o None si no se le ve
+    ningún problema. Mira la estructura y los comandos, sin compilar nada: se
+    llama para cada lectura del OCR y pdflatex puede no estar instalado.
+    """
+    tokens = [t for t in _TOKEN_LATEX.findall(latex) if not t.isspace()]
+    pila = [_Marco("raíz")]
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        i += 1
+        m = pila[-1]
+        if t in ("%", "#", "$"):
+            return f"«{t}» sin escapar"
+
+        if m.argumentos and t in ("}", "&", "^", "_", "\\\\", r"\right", r"\end", r"\middle"):
+            return f"falta un argumento antes de «{t}»"
+
+        if t == "{":
+            es_argumento = m.argumentos > 0
+            texto = m.texto or (es_argumento and m.argumento_de_texto)
+            m.atomo()
+            if not m.argumentos:
+                m.argumento_de_texto = False
+            pila.append(_Marco("{", texto=texto, es_argumento=es_argumento))
+        elif t == "}":
+            if m.tipo != "{":
+                return "«}» sin abrir" if len(pila) == 1 else f"«}}» cierra mal un {m.tipo}"
+            pila.pop()
+        elif m.texto:
+            if t in ("^", "_", "&"):
+                return f"«{t}» dentro de texto"
+            if t.startswith("\\") and t[1:] not in _SIGNOS_EN_TEXTO:
+                return f"{t} dentro de texto"
+        elif t in ("^", "_"):
+            if t == "^" and m.sup or t == "_" and m.sub:
+                return f"doble «{t}»"
+            m.sup, m.sub = m.sup or t == "^", m.sub or t == "_"
+            m.argumentos = 1
+        elif t == "'":
+            if m.sup:
+                return "prima después de un superíndice"
+        elif t == "&":
+            if not m.entorno:
+                return "«&» fuera de una tabla"
+            m.sup = m.sub = False
+        elif t == r"\left":
+            if i >= len(tokens) or tokens[i] not in _DELIMITADORES:
+                return r"\left sin delimitador"
+            i += 1
+            m.atomo()
+            pila.append(_Marco(r"\left"))
+        elif t == r"\right":
+            if m.tipo != r"\left":
+                return r"\right sin su \left"
+            if i >= len(tokens) or tokens[i] not in _DELIMITADORES:
+                return r"\right sin delimitador"
+            i += 1
+            pila.pop()
+        elif t == r"\middle":
+            if m.tipo != r"\left":
+                return r"\middle fuera de \left…\right"
+            if i >= len(tokens) or tokens[i] not in _DELIMITADORES:
+                return r"\middle sin delimitador"
+            i += 1
+        elif t == r"\begin":
+            nombre, i = _leer_grupo(tokens, i)
+            if nombre not in _ENTORNOS:
+                return f"entorno desconocido: {nombre}"
+            if nombre in ("array", "subarray", "alignedat"):
+                columnas, i = _leer_grupo(tokens, i)
+                if not columnas:
+                    return f"{nombre} sin columnas"
+            m.atomo()
+            pila.append(_Marco(nombre, entorno=True))
+        elif t == r"\end":
+            nombre, i = _leer_grupo(tokens, i)
+            if not m.entorno or nombre != m.tipo:
+                return rf"\end{{{nombre}}} no cierra lo último que se abrió"
+            pila.pop()
+        elif t.startswith("\\") and t[1:] in _TAMANOS:
+            if i >= len(tokens) or tokens[i] not in _DELIMITADORES:
+                return f"{t} sin delimitador"
+            i += 1
+            m.atomo()
+        elif t in (r"\limits", r"\nolimits", r"\displaylimits"):
+            pass
+        elif t.startswith("\\") and len(t) == 2 and not t[1].isalpha():
+            if t[1] not in _SIGNOS:
+                return f"comando desconocido: {t}"
+            m.atomo()
+            if t == "\\\\":
+                m.sup = m.sub = False
+        elif t.startswith("\\"):
+            nombre = t[1:]
+            if nombre in _COMANDOS_DE_TEXTO:
+                m.atomo()
+                m.argumentos += 1
+                m.argumento_de_texto = True
+            elif nombre in _ARGUMENTOS:
+                m.atomo()
+                m.argumentos += _ARGUMENTOS[nombre]
+                if nombre in ("operatorname", "operatornamewithlimits") and tokens[i:i + 1] == ["*"]:
+                    i += 1
+                if nombre in ("sqrt", "xrightarrow", "xleftarrow") and tokens[i:i + 1] == ["["]:
+                    try:
+                        i = tokens.index("]", i) + 1
+                    except ValueError:
+                        return f"{t}[ sin cerrar"
+            elif nombre in _COMANDOS:
+                m.atomo()
+            else:
+                return f"comando desconocido: {t}"
+        else:
+            m.atomo()
+
+    if len(pila) > 1:
+        return f"sin cerrar: {pila[-1].tipo}"
+    if pila[0].argumentos:
+        return "falta un argumento al final"
+    return None
 
 
 # ────────────────────────────────────────────────────────────
@@ -290,9 +584,10 @@ def join_spaced_latex(latex: str) -> str:
         salida,
     )
     # «\operatorname*{lim}» es \lim; con texto entre espacios, \text{ and }.
+    # Si sigue una letra hace falta el espacio: \logA no existe.
     salida = re.sub(
-        r"\\operatorname\*?\{(lim|max|min|sup|inf|limsup|liminf|det|exp|log|sin|cos)\}",
-        r"\\\1", salida,
+        r"\\operatorname\*?\{(lim|max|min|sup|inf|limsup|liminf|det|exp|log|sin|cos)\}(?=([A-Za-z])?)",
+        lambda m: "\\" + m.group(1) + (" " if m.group(2) else ""), salida,
     )
     salida = re.sub(r"\\mathrm\{( [^{}]* )\}", r"\\text{\1}", salida)
     # Un \i suelto (la i sin punto de texto) es ruido del modelo y en una

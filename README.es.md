@@ -189,7 +189,9 @@ caracteres exactos del PDF, aunque a veces no sepa colocarlos; el modelo los
 coloca bien, pero de vez en cuando se inventa alguno (en las pruebas leyó
 `9x+2y=7` donde ponía `3x`). Así que se hacen las dos lecturas y se comparan
 sus glifos: la del OCR solo se queda si usa los mismos caracteres que hay en el
-PDF. pix2tex y Texify siguen funcionando si están instalados
+PDF. Además tiene que ser LaTeX válido: una lectura con un `\left` sin `\right`,
+o cortada a mitad de un `aligned`, se descarta para que no rompa la compilación.
+pix2tex y Texify siguen funcionando si están instalados
 (`pip install pix2tex`, unos 1,5 GB con PyTorch).
 
 **En el editor** hay además `Ctrl+Shift+V`: recorta una fórmula de donde sea,

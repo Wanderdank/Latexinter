@@ -83,7 +83,9 @@ and the fonts to work out what was lost:
   PyTorch; the 120 MB model downloads on first use. Its reading is only kept
   when it uses the same glyphs the PDF has: the layout reconstruction knows the
   exact characters, the OCR is better at arranging them but sometimes makes
-  one up. pix2tex and Texify still work if they're installed.
+  one up. It must also be valid LaTeX: a reading with a `\left` and no `\right`,
+  or cut off halfway through an `aligned`, is dropped so it can't break the
+  compile. pix2tex and Texify still work if they're installed.
 
 The sample's equations come back as
 `\int_{-\infty}^{\infty}e^{-x^{2}}dx=\sqrt{\pi}` and
